@@ -1,0 +1,17 @@
+# Secrets — never commit credentials (the example file currently holds live keys)
+.env
+.env.example
+.env.*
+
+# Generated dataset & artifacts
+fifa_forecasts.db
+fifa_forecasts.db-journal
+experiment_manifest.json
+/data/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ipynb_checkpoints/

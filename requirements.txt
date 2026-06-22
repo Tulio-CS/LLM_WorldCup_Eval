@@ -1,0 +1,10 @@
+# Core (always required)
+pandas>=2.0
+openpyxl>=3.1
+python-dotenv>=1.0
+
+# Provider SDKs (optional — install the ones you need).
+# Without these, the corresponding provider can only run in --dry-run (mock) mode.
+openai>=1.40          # OpenAI GPT-5 family AND xAI Grok (OpenAI-compatible API)
+anthropic>=0.40       # Claude Opus / Sonnet
+google-genai>=0.3     # Gemini 2.5 Pro / Flash
