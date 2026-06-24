@@ -41,6 +41,8 @@
 <!-- Tabs -->
 <nav class="bg-slate-900 border-b border-slate-800 px-6 flex gap-1">
   <button class="tab-btn active px-4 py-2 text-sm font-medium text-slate-300 hover:text-white transition" onclick="showTab('run')">Rodar</button>
+  <button class="tab-btn px-4 py-2 text-sm font-medium text-slate-300 hover:text-white transition" onclick="showTab('planned')">Planejado</button>
+  <button class="tab-btn px-4 py-2 text-sm font-medium text-slate-300 hover:text-white transition" onclick="showTab('dashboard')">Dashboard</button>
   <button class="tab-btn px-4 py-2 text-sm font-medium text-slate-300 hover:text-white transition" onclick="showTab('results')">Resultados</button>
   <button class="tab-btn px-4 py-2 text-sm font-medium text-slate-300 hover:text-white transition" onclick="showTab('manual')">Inserir Manual</button>
 </nav>
@@ -169,7 +171,13 @@
           <h3 class="font-semibold text-white">Execuções planejadas</h3>
           <p id="plan-summary" class="text-xs text-slate-400 mt-1">—</p>
         </div>
-        <button onclick="closePlan()" class="text-slate-400 hover:text-white text-2xl leading-none">&times;</button>
+        <div class="flex items-center gap-3">
+          <button id="plan-save-btn" onclick="savePlan()"
+            class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium px-3 py-1.5 rounded transition">
+            💾 Salvar plano
+          </button>
+          <button onclick="closePlan()" class="text-slate-400 hover:text-white text-2xl leading-none">&times;</button>
+        </div>
       </div>
       <div class="overflow-y-auto">
         <table class="w-full text-xs">
@@ -268,12 +276,12 @@
 
   <!-- Detail modal -->
   <div id="detail-modal" class="hidden fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" onclick="closeDetail(event)">
-    <div class="bg-slate-900 border border-slate-700 rounded-xl max-w-2xl w-full max-h-[80vh] overflow-y-auto p-6" onclick="event.stopPropagation()">
+    <div class="bg-slate-900 border border-slate-700 rounded-xl max-w-3xl w-full max-h-[85vh] overflow-y-auto p-6" onclick="event.stopPropagation()">
       <div class="flex justify-between items-center mb-4">
         <h3 class="font-semibold text-white">Detalhe do Run</h3>
         <button onclick="closeDetail()" class="text-slate-400 hover:text-white text-xl leading-none">&times;</button>
       </div>
-      <pre id="detail-content" class="text-xs text-slate-300 whitespace-pre-wrap break-words font-mono"></pre>
+      <div id="detail-content" class="text-xs text-slate-300"></div>
     </div>
   </div>
 </div>
@@ -347,11 +355,104 @@
   </div>
 </div>
 
+<!-- ═══════════════════════ TAB: PLANEJADO ═══════════════════════ -->
+<div id="tab-planned" class="tab-pane hidden p-6 max-w-7xl mx-auto">
+  <div class="flex items-center justify-between mb-4">
+    <div>
+      <h2 class="text-sm font-semibold text-slate-300 uppercase tracking-wide">Execuções planejadas (salvas)</h2>
+      <p id="planned-summary" class="text-xs text-slate-500 mt-1">—</p>
+    </div>
+    <div class="flex items-center gap-2">
+      <select id="planned-filter" onchange="loadPlanned()" class="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sm text-slate-200">
+        <option value="all">Todas</option>
+        <option value="pending" selected>Pendentes</option>
+        <option value="done">Concluídas</option>
+      </select>
+      <button onclick="loadPlanned()" class="bg-slate-700 hover:bg-slate-600 text-sm px-3 py-1 rounded transition">↻ Atualizar</button>
+      <button onclick="clearPlanned('done')" class="bg-slate-700 hover:bg-slate-600 text-sm px-3 py-1 rounded transition">Limpar concluídas</button>
+      <button onclick="clearPlanned('all')" class="bg-red-800 hover:bg-red-700 text-sm px-3 py-1 rounded transition">Limpar tudo</button>
+    </div>
+  </div>
+  <div class="overflow-x-auto rounded-lg border border-slate-800">
+    <table class="w-full text-xs">
+      <thead class="bg-slate-800 text-slate-400 uppercase tracking-wide">
+        <tr>
+          <th class="px-3 py-2 text-left">Quando</th>
+          <th class="px-3 py-2 text-left">Partida</th>
+          <th class="px-3 py-2 text-left">Modelo</th>
+          <th class="px-3 py-2 text-left">Prompt</th>
+          <th class="px-3 py-2 text-center">Ordem</th>
+          <th class="px-3 py-2 text-center">Momento</th>
+          <th class="px-3 py-2 text-center">Status</th>
+          <th class="px-3 py-2 text-center">Placar</th>
+        </tr>
+      </thead>
+      <tbody id="planned-body" class="divide-y divide-slate-800 text-slate-300">
+        <tr><td colspan="8" class="px-3 py-6 text-center text-slate-500">Carregando…</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="text-xs text-slate-600 mt-2">A lista é salva no banco (sobrevive a refresh). Salve um plano pela aba <b>Rodar → Ver plano → Salvar plano</b>.</p>
+</div>
+
+<!-- ═══════════════════════ TAB: DASHBOARD ═══════════════════════ -->
+<div id="tab-dashboard" class="tab-pane hidden p-6 max-w-7xl mx-auto space-y-5">
+  <!-- KPI cards -->
+  <div id="dash-kpis" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3"></div>
+
+  <!-- Prediction summary -->
+  <div class="grid lg:grid-cols-2 gap-5">
+    <div class="bg-slate-900 rounded-lg p-4 border border-slate-800">
+      <h3 class="text-sm font-semibold text-slate-300 mb-3">Previsões — resumo geral</h3>
+      <div id="dash-pred" class="text-sm text-slate-300 space-y-2">—</div>
+    </div>
+    <div class="bg-slate-900 rounded-lg p-4 border border-slate-800">
+      <h3 class="text-sm font-semibold text-slate-300 mb-3">Placares mais previstos</h3>
+      <div id="dash-scores" class="space-y-1.5">—</div>
+    </div>
+  </div>
+
+  <!-- By model -->
+  <div class="bg-slate-900 rounded-lg p-4 border border-slate-800">
+    <h3 class="text-sm font-semibold text-slate-300 mb-3">Por modelo</h3>
+    <div class="overflow-x-auto">
+      <table class="w-full text-xs">
+        <thead class="text-slate-500 uppercase tracking-wide border-b border-slate-800">
+          <tr>
+            <th class="px-2 py-1.5 text-left">Modelo</th>
+            <th class="px-2 py-1.5 text-center">Total</th>
+            <th class="px-2 py-1.5 text-center">Sucesso</th>
+            <th class="px-2 py-1.5 text-center">Erros</th>
+            <th class="px-2 py-1.5 text-center">JSON válido</th>
+            <th class="px-2 py-1.5 text-center">Latência média</th>
+            <th class="px-2 py-1.5 text-center">Tokens médios</th>
+            <th class="px-2 py-1.5 text-center">Custo total</th>
+          </tr>
+        </thead>
+        <tbody id="dash-models" class="divide-y divide-slate-800 text-slate-300"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Probabilities by model + by prompt/moment -->
+  <div class="grid lg:grid-cols-2 gap-5">
+    <div class="bg-slate-900 rounded-lg p-4 border border-slate-800">
+      <h3 class="text-sm font-semibold text-slate-300 mb-3">Probabilidades médias por modelo (1 / X / 2)</h3>
+      <div id="dash-probs" class="space-y-2">—</div>
+    </div>
+    <div class="bg-slate-900 rounded-lg p-4 border border-slate-800">
+      <h3 class="text-sm font-semibold text-slate-300 mb-3">Por prompt &amp; momento</h3>
+      <div id="dash-breakdown" class="text-xs text-slate-300 space-y-3">—</div>
+    </div>
+  </div>
+</div>
+
 <script>
 // ── State ──────────────────────────────────────────────────────────────────
 let allModels = [], allMatches = [], allPrompts = [], allMoments = [];
 let currentPage = 0, pageSize = 50, totalRows = 0;
 let activeSource = null;
+let lastPlanBody = null;
 let debounceTimer = null;
 
 const MOMENT_LABELS = {
@@ -516,6 +617,8 @@ function showTab(name) {
     if (el.getAttribute('onclick') === `showTab('${name}')`) el.classList.add('active');
   });
   if (name === 'results') { currentPage = 0; loadResults(); }
+  if (name === 'planned') loadPlanned();
+  if (name === 'dashboard') loadDashboard();
 }
 
 // ── Run tab ────────────────────────────────────────────────────────────────
@@ -631,6 +734,7 @@ async function showPlan() {
     match_moments: moments,
     runs_per_combination: parseInt(document.getElementById('reps').value) || 1,
   };
+  lastPlanBody = body;  // reused by "Salvar plano"
 
   const modal = document.getElementById('plan-modal');
   modal.classList.remove('hidden');
@@ -683,6 +787,167 @@ async function showPlan() {
 function closePlan(event) {
   if (event && event.target !== event.currentTarget) return;
   document.getElementById('plan-modal').classList.add('hidden');
+}
+
+async function savePlan() {
+  if (!lastPlanBody) { alert('Gere um plano primeiro.'); return; }
+  const btn = document.getElementById('plan-save-btn');
+  btn.disabled = true; btn.textContent = 'Salvando…';
+  try {
+    const res = await fetch('/api/plan/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(lastPlanBody),
+    });
+    const data = await res.json();
+    btn.textContent = `✓ Salvo (${data.total_planned} no total)`;
+    setTimeout(() => { btn.disabled = false; btn.textContent = '💾 Salvar plano'; }, 2500);
+  } catch (e) {
+    btn.disabled = false; btn.textContent = '💾 Salvar plano';
+    alert('Erro ao salvar: ' + e);
+  }
+}
+
+// ── Planejado tab ───────────────────────────────────────────────────────────
+async function loadPlanned() {
+  const filter = document.getElementById('planned-filter').value;
+  const body = document.getElementById('planned-body');
+  body.innerHTML = '<tr><td colspan="8" class="px-3 py-6 text-center text-slate-500">Carregando…</td></tr>';
+  let data;
+  try {
+    const res = await fetch('/api/planned?only=' + filter);
+    data = await res.json();
+  } catch (e) {
+    body.innerHTML = `<tr><td colspan="8" class="px-3 py-6 text-center text-red-400">${e}</td></tr>`;
+    return;
+  }
+  document.getElementById('planned-summary').innerHTML =
+    `<span class="text-white font-semibold">${data.total}</span> salvas · ` +
+    `<span class="text-sky-400 font-semibold">${data.pending}</span> pendentes · ` +
+    `<span class="text-green-400 font-semibold">${data.done}</span> concluídas`;
+
+  if (!data.rows.length) {
+    body.innerHTML = '<tr><td colspan="8" class="px-3 py-6 text-center text-slate-500">Nenhuma execução planejada nesse filtro</td></tr>';
+    return;
+  }
+  body.innerHTML = data.rows.map(r => {
+    const st = r.done
+      ? `<span class="status-success font-medium">${esc(r.execution_status || 'feito')}</span>`
+      : '<span class="status-skipped font-medium">pendente</span>';
+    const score = (r.parsed_score_team_1 != null && r.parsed_score_team_2 != null)
+      ? `${r.parsed_score_team_1}–${r.parsed_score_team_2}` : '—';
+    return `<tr class="${r.done ? 'opacity-60' : ''}">
+      <td class="px-3 py-1.5 whitespace-nowrap font-mono text-slate-300">${r.scheduled_local || '—'}</td>
+      <td class="px-3 py-1.5 whitespace-nowrap">${esc(r.teams)}</td>
+      <td class="px-3 py-1.5 font-mono">${esc(r.model)}</td>
+      <td class="px-3 py-1.5 text-slate-400 max-w-[140px] truncate" title="${esc(r.prompt_id)}">${esc(r.prompt_id)}</td>
+      <td class="px-3 py-1.5 text-center text-slate-500">${(r.team_order_type || '')[0] || '—'}</td>
+      <td class="px-3 py-1.5 text-center text-slate-400 whitespace-nowrap">${momentLabel(r.match_moment)}</td>
+      <td class="px-3 py-1.5 text-center">${st}</td>
+      <td class="px-3 py-1.5 text-center font-mono">${score}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function clearPlanned(scope) {
+  const msg = scope === 'all'
+    ? 'Remover TODAS as execuções planejadas salvas?'
+    : 'Remover as planejadas que já foram concluídas?';
+  if (!confirm(msg)) return;
+  await fetch('/api/planned/clear?scope=' + scope, { method: 'POST' });
+  loadPlanned();
+}
+
+// ── Dashboard tab ───────────────────────────────────────────────────────────
+function pct(n, d) { return d ? Math.round((n / d) * 100) : 0; }
+function kpiCard(label, value, color) {
+  return `<div class="bg-slate-900 rounded-lg p-3 border border-slate-800">
+    <div class="text-2xl font-bold ${color || 'text-white'}">${value}</div>
+    <div class="text-xs text-slate-500 mt-0.5">${label}</div>
+  </div>`;
+}
+
+async function loadDashboard() {
+  let d;
+  try {
+    const res = await fetch('/api/dashboard');
+    d = await res.json();
+  } catch (e) { return; }
+
+  const t = d.totals;
+  document.getElementById('dash-kpis').innerHTML =
+    kpiCard('Total de execuções', t.total) +
+    kpiCard('Sucesso', t.success, 'text-green-400') +
+    kpiCard('Erros', t.errors, 'text-red-400') +
+    kpiCard('Manuais', t.manual, 'text-violet-400') +
+    kpiCard('JSON válido', t.valid_json, 'text-sky-400') +
+    kpiCard('Taxa de sucesso', pct(t.success, t.total) + '%', 'text-emerald-400');
+
+  // Predictions
+  const p = d.predictions;
+  const totOut = (p.t1_win + p.draw + p.t2_win) || 1;
+  document.getElementById('dash-pred').innerHTML = p.n ? `
+    <div class="flex justify-between"><span class="text-slate-400">Previsões com placar</span><span class="font-mono">${p.n}</span></div>
+    <div class="flex justify-between"><span class="text-slate-400">Gols médios (time 1 / time 2)</span><span class="font-mono">${(p.avg_t1||0).toFixed(2)} / ${(p.avg_t2||0).toFixed(2)}</span></div>
+    <div class="flex justify-between"><span class="text-slate-400">Gols médios por jogo</span><span class="font-mono">${(p.avg_goals||0).toFixed(2)}</span></div>
+    <div class="mt-2">
+      <div class="text-xs text-slate-400 mb-1">Resultado previsto (time 1 / empate / time 2)</div>
+      <div class="flex h-5 rounded overflow-hidden text-[10px] font-medium text-white">
+        <div class="bg-sky-600 flex items-center justify-center" style="width:${pct(p.t1_win,totOut)}%" title="Vitória time 1">${pct(p.t1_win,totOut)}%</div>
+        <div class="bg-slate-600 flex items-center justify-center" style="width:${pct(p.draw,totOut)}%" title="Empate">${pct(p.draw,totOut)}%</div>
+        <div class="bg-rose-600 flex items-center justify-center" style="width:${pct(p.t2_win,totOut)}%" title="Vitória time 2">${pct(p.t2_win,totOut)}%</div>
+      </div>
+    </div>` : '<span class="text-slate-500">Sem previsões com placar ainda.</span>';
+
+  // Top scores
+  const maxScore = Math.max(1, ...d.top_scores.map(s => s.cnt));
+  document.getElementById('dash-scores').innerHTML = d.top_scores.length
+    ? d.top_scores.map(s => `
+      <div class="flex items-center gap-2">
+        <span class="font-mono text-slate-200 w-10">${esc(s.scoreline)}</span>
+        <div class="flex-1 bg-slate-800 rounded h-4 overflow-hidden">
+          <div class="bg-sky-600 h-full" style="width:${pct(s.cnt, maxScore)}%"></div>
+        </div>
+        <span class="text-slate-400 w-8 text-right">${s.cnt}</span>
+      </div>`).join('')
+    : '<span class="text-slate-500 text-sm">—</span>';
+
+  // By model
+  document.getElementById('dash-models').innerHTML = d.by_model.map(m => `
+    <tr>
+      <td class="px-2 py-1.5 font-mono text-slate-200">${esc(m.model)}</td>
+      <td class="px-2 py-1.5 text-center">${m.total}</td>
+      <td class="px-2 py-1.5 text-center text-green-400">${m.success} <span class="text-slate-600">(${pct(m.success, m.total)}%)</span></td>
+      <td class="px-2 py-1.5 text-center text-red-400">${m.errors}</td>
+      <td class="px-2 py-1.5 text-center text-sky-400">${m.valid_json}</td>
+      <td class="px-2 py-1.5 text-center text-slate-400">${m.avg_latency != null ? Math.round(m.avg_latency) + ' ms' : '—'}</td>
+      <td class="px-2 py-1.5 text-center text-slate-400">${m.avg_tokens != null ? Math.round(m.avg_tokens) : '—'}</td>
+      <td class="px-2 py-1.5 text-center text-slate-400">${m.total_cost ? '$' + Number(m.total_cost).toFixed(4) : '—'}</td>
+    </tr>`).join('') || '<tr><td colspan="8" class="px-2 py-4 text-center text-slate-500">Sem dados</td></tr>';
+
+  // Probabilities by model
+  document.getElementById('dash-probs').innerHTML = d.prob_by_model.length
+    ? d.prob_by_model.map(m => {
+        const a = Math.round(m.avg_t1 || 0), b = Math.round(m.avg_draw || 0), c = Math.round(m.avg_t2 || 0);
+        return `<div>
+          <div class="flex justify-between text-xs mb-0.5"><span class="font-mono text-slate-300">${esc(m.model)}</span><span class="text-slate-500">${a}/${b}/${c} · n=${m.n}</span></div>
+          <div class="flex h-4 rounded overflow-hidden text-[9px] text-white">
+            <div class="bg-sky-600 flex items-center justify-center" style="width:${a}%">${a}</div>
+            <div class="bg-slate-600 flex items-center justify-center" style="width:${b}%">${b}</div>
+            <div class="bg-rose-600 flex items-center justify-center" style="width:${c}%">${c}</div>
+          </div>
+        </div>`;
+      }).join('')
+    : '<span class="text-slate-500 text-sm">Nenhum prompt com probabilidades ainda.</span>';
+
+  // By prompt & moment
+  const promptRows = d.by_prompt.map(p => `
+    <div class="flex justify-between"><span class="text-slate-400">${esc(p.prompt_id)}</span><span class="font-mono">${p.success}/${p.total}</span></div>`).join('');
+  const momentRows = d.by_moment.map(m => `
+    <div class="flex justify-between"><span class="text-slate-400">${momentLabel(m.match_moment)}</span><span class="font-mono">${m.success}/${m.total}</span></div>`).join('');
+  document.getElementById('dash-breakdown').innerHTML =
+    `<div><div class="text-slate-500 uppercase text-[10px] tracking-wide mb-1">Por prompt (sucesso/total)</div>${promptRows || '—'}</div>` +
+    `<div><div class="text-slate-500 uppercase text-[10px] tracking-wide mb-1">Por momento (sucesso/total)</div>${momentRows || '—'}</div>`;
 }
 
 // ── Results tab ────────────────────────────────────────────────────────────
@@ -739,7 +1004,7 @@ async function loadResults() {
       <td class="px-3 py-2 text-center text-slate-500">${ms}</td>
       <td class="px-3 py-2 text-center text-slate-500">${tok}</td>
       <td class="px-3 py-2 text-center">
-        <button onclick="showDetail('${r.run_id}')" class="text-sky-500 hover:text-sky-300 text-xs">ver</button>
+        <button onclick="showDetail('${r.run_id}')" class="text-sky-500 hover:text-sky-300 text-xs">${r.prompt_id === 'six-hats-prediction' ? '🎩 ver' : 'ver'}</button>
       </td>
     </tr>`;
   }).join('');
@@ -761,12 +1026,69 @@ function changePage(dir) {
   loadResults();
 }
 
+const HAT_META = {
+  white_hat:  { label: '⚪ White — fatos & dados',        cls: 'border-slate-400' },
+  red_hat:    { label: '🔴 Red — intuição & emoção',      cls: 'border-red-500' },
+  black_hat:  { label: '⚫ Black — riscos & fraquezas',    cls: 'border-slate-600' },
+  yellow_hat: { label: '🟡 Yellow — forças & oportunidades', cls: 'border-yellow-500' },
+  green_hat:  { label: '🟢 Green — cenários criativos',    cls: 'border-green-500' },
+  blue_hat:   { label: '🔵 Blue — síntese & decisão',      cls: 'border-sky-500' },
+};
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+}
+
 async function showDetail(runId) {
   const res = await fetch(`/api/runs/${encodeURIComponent(runId)}`);
   const data = await res.json();
-  const modal = document.getElementById('detail-modal');
-  document.getElementById('detail-content').textContent = JSON.stringify(data, null, 2);
-  modal.classList.remove('hidden');
+  const el = document.getElementById('detail-content');
+
+  const score = (data.parsed_score_team_1 != null && data.parsed_score_team_2 != null)
+    ? `${data.parsed_score_team_1}–${data.parsed_score_team_2}` : '—';
+  const probs = (data.parsed_team1_win_probability != null)
+    ? `${data.parsed_team1_win_probability}% / ${data.parsed_draw_probability}% / ${data.parsed_team2_win_probability}%` : '—';
+
+  const meta = `
+    <div class="grid grid-cols-2 gap-x-6 gap-y-1 mb-4 text-xs">
+      <div><span class="text-slate-500">Partida:</span> <span class="text-slate-200">${esc(data.team_1)} vs ${esc(data.team_2)}</span></div>
+      <div><span class="text-slate-500">Modelo:</span> <span class="font-mono text-slate-200">${esc(data.model)}</span></div>
+      <div><span class="text-slate-500">Prompt:</span> <span class="text-slate-200">${esc(data.prompt_id)}</span></div>
+      <div><span class="text-slate-500">Momento:</span> <span class="text-slate-200">${momentLabel(data.match_moment)}</span></div>
+      <div><span class="text-slate-500">Ordem:</span> <span class="text-slate-200">${esc(data.team_order_type)}</span></div>
+      <div><span class="text-slate-500">Status:</span> <span class="text-slate-200">${esc(data.execution_status)}</span></div>
+      <div><span class="text-slate-500">Placar previsto:</span> <span class="font-mono text-white">${score}</span></div>
+      <div><span class="text-slate-500">Probs (1/X/2):</span> <span class="font-mono text-slate-200">${probs}</span></div>
+      <div><span class="text-slate-500">Latência:</span> <span class="text-slate-200">${data.latency_ms != null ? Math.round(data.latency_ms) + ' ms' : '—'}</span></div>
+      <div><span class="text-slate-500">Tokens:</span> <span class="text-slate-200">${data.total_tokens ?? '—'}</span></div>
+    </div>`;
+
+  // Six hats (only if present)
+  const hatKeys = Object.keys(HAT_META).filter(k => data[k]);
+  let hats = '';
+  if (hatKeys.length) {
+    hats = '<h4 class="text-sm font-semibold text-white mb-2 mt-2">🎩 Six Thinking Hats</h4>' +
+      hatKeys.map(k => `
+        <div class="border-l-4 ${HAT_META[k].cls} bg-slate-800/50 rounded-r px-3 py-2 mb-2">
+          <div class="text-xs font-semibold text-slate-300 mb-1">${HAT_META[k].label}</div>
+          <p class="text-xs text-slate-300 leading-relaxed whitespace-pre-wrap">${esc(data[k])}</p>
+        </div>`).join('');
+  }
+
+  const errBlock = data.error_message
+    ? `<div class="bg-red-950/40 border border-red-800 rounded px-3 py-2 mb-3 text-red-300 text-xs whitespace-pre-wrap">${esc(data.error_message)}</div>`
+    : '';
+
+  const raw = data.raw_response
+    ? `<details class="mt-3"><summary class="cursor-pointer text-slate-400 text-xs hover:text-slate-200">Resposta bruta do modelo</summary>
+        <pre class="text-xs text-slate-400 whitespace-pre-wrap break-words font-mono mt-2 bg-slate-950 rounded p-3 max-h-64 overflow-y-auto">${esc(data.raw_response)}</pre></details>`
+    : '';
+
+  const json = `<details class="mt-2"><summary class="cursor-pointer text-slate-500 text-xs hover:text-slate-300">JSON completo</summary>
+        <pre class="text-xs text-slate-500 whitespace-pre-wrap break-words font-mono mt-2 bg-slate-950 rounded p-3 max-h-64 overflow-y-auto">${esc(JSON.stringify(data, null, 2))}</pre></details>`;
+
+  el.innerHTML = meta + errBlock + hats + raw + json;
+  document.getElementById('detail-modal').classList.remove('hidden');
 }
 
 function closeDetail(e) {

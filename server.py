@@ -165,6 +165,108 @@ def get_stats():
         conn.close()
 
 
+@app.get("/api/dashboard")
+def get_dashboard():
+    """Aggregated statistics — execution health + model prediction behaviour."""
+    db_path = cfg.ROOT / load_config().database_path
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        def one(sql, params=()):
+            return conn.execute(sql, params).fetchone()[0]
+
+        total = one("SELECT COUNT(*) FROM forecast_runs")
+        success = one("SELECT COUNT(*) FROM forecast_runs WHERE execution_status='success'")
+        errors = one("SELECT COUNT(*) FROM forecast_runs WHERE execution_status='error'")
+        manual = one("SELECT COUNT(*) FROM forecast_runs WHERE execution_status='manual'")
+        valid_json = one("SELECT COUNT(*) FROM forecast_runs WHERE json_valid=1")
+
+        # Per-model health + cost/latency
+        by_model = [dict(r) for r in conn.execute(
+            """SELECT model,
+                      COUNT(*) AS total,
+                      SUM(CASE WHEN execution_status='success' THEN 1 ELSE 0 END) AS success,
+                      SUM(CASE WHEN execution_status='error' THEN 1 ELSE 0 END) AS errors,
+                      SUM(CASE WHEN json_valid=1 THEN 1 ELSE 0 END) AS valid_json,
+                      AVG(latency_ms) AS avg_latency,
+                      AVG(total_tokens) AS avg_tokens,
+                      SUM(COALESCE(api_cost,0)) AS total_cost
+               FROM forecast_runs
+               GROUP BY model ORDER BY total DESC"""
+        ).fetchall()]
+
+        by_prompt = [dict(r) for r in conn.execute(
+            """SELECT prompt_id,
+                      COUNT(*) AS total,
+                      SUM(CASE WHEN execution_status='success' THEN 1 ELSE 0 END) AS success
+               FROM forecast_runs GROUP BY prompt_id ORDER BY total DESC"""
+        ).fetchall()]
+
+        by_moment = [dict(r) for r in conn.execute(
+            """SELECT match_moment,
+                      COUNT(*) AS total,
+                      SUM(CASE WHEN execution_status='success' THEN 1 ELSE 0 END) AS success
+               FROM forecast_runs GROUP BY match_moment ORDER BY total DESC"""
+        ).fetchall()]
+
+        # Prediction behaviour (only rows with a parsed scoreline)
+        pred = conn.execute(
+            """SELECT
+                  COUNT(*) AS n,
+                  AVG(parsed_score_team_1) AS avg_t1,
+                  AVG(parsed_score_team_2) AS avg_t2,
+                  AVG(parsed_score_team_1 + parsed_score_team_2) AS avg_goals,
+                  SUM(CASE WHEN parsed_score_team_1 > parsed_score_team_2 THEN 1 ELSE 0 END) AS t1_win,
+                  SUM(CASE WHEN parsed_score_team_1 = parsed_score_team_2 THEN 1 ELSE 0 END) AS draw,
+                  SUM(CASE WHEN parsed_score_team_1 < parsed_score_team_2 THEN 1 ELSE 0 END) AS t2_win
+               FROM forecast_runs
+               WHERE parsed_score_team_1 IS NOT NULL
+                 AND parsed_score_team_2 IS NOT NULL"""
+        ).fetchone()
+
+        # Most-predicted scorelines
+        top_scores = [dict(r) for r in conn.execute(
+            """SELECT (parsed_score_team_1 || '-' || parsed_score_team_2) AS scoreline,
+                      COUNT(*) AS cnt
+               FROM forecast_runs
+               WHERE parsed_score_team_1 IS NOT NULL AND parsed_score_team_2 IS NOT NULL
+               GROUP BY scoreline ORDER BY cnt DESC LIMIT 8"""
+        ).fetchall()]
+
+        # Average win/draw/loss probabilities by model (probability prompts only)
+        prob_by_model = [dict(r) for r in conn.execute(
+            """SELECT model,
+                      AVG(parsed_team1_win_probability) AS avg_t1,
+                      AVG(parsed_draw_probability) AS avg_draw,
+                      AVG(parsed_team2_win_probability) AS avg_t2,
+                      COUNT(*) AS n
+               FROM forecast_runs
+               WHERE parsed_team1_win_probability IS NOT NULL
+               GROUP BY model ORDER BY n DESC"""
+        ).fetchall()]
+
+        return {
+            "totals": {
+                "total": total, "success": success, "errors": errors,
+                "manual": manual, "valid_json": valid_json,
+            },
+            "by_model": by_model,
+            "by_prompt": by_prompt,
+            "by_moment": by_moment,
+            "predictions": {
+                "n": pred["n"] or 0,
+                "avg_t1": pred["avg_t1"], "avg_t2": pred["avg_t2"],
+                "avg_goals": pred["avg_goals"],
+                "t1_win": pred["t1_win"] or 0, "draw": pred["draw"] or 0,
+                "t2_win": pred["t2_win"] or 0,
+            },
+            "top_scores": top_scores,
+            "prob_by_model": prob_by_model,
+        }
+    finally:
+        conn.close()
+
+
 @app.get("/api/runs/{run_id}")
 def get_run(run_id: str):
     db_path = cfg.ROOT / load_config().database_path
@@ -211,17 +313,42 @@ class PlanRequest(BaseModel):
     runs_per_combination: int = 1
 
 
-@app.post("/api/plan")
-def plan(req: PlanRequest):
-    """Preview the full grid of planned executions — what will run, and when."""
-    config = load_config()
+def _iter_plan(config, req: PlanRequest):
+    """Yield one dict per planned execution (the full combinatorial grid)."""
     matches = load_matches(cfg.ROOT / config.matches_csv)
     matches = filter_matches(matches, dates=req.dates, match_ids=req.match_ids)
     models = [
         m for m in config.models
         if m["key"] in req.model_keys and m.get("enabled", True)
     ]
+    for match in matches:
+        for moment in req.match_moments:
+            for order in req.team_order_types:
+                for model in models:
+                    for prompt_id in req.prompt_ids:
+                        for rep in range(1, req.runs_per_combination + 1):
+                            run_id = make_run_id(
+                                match.match_id, model["key"], prompt_id,
+                                order, rep, moment,
+                            )
+                            yield {
+                                "run_id": run_id,
+                                "match_id": match.match_id,
+                                "teams": f"{match.team_1} vs {match.team_2}",
+                                "kickoff_local": match.kickoff_local,
+                                "scheduled_local": _scheduled_local(match.kickoff_local, moment),
+                                "model": model["key"],
+                                "prompt_id": prompt_id,
+                                "team_order_type": order,
+                                "match_moment": moment,
+                                "repetition_number": rep,
+                            }
 
+
+@app.post("/api/plan")
+def plan(req: PlanRequest):
+    """Preview the full grid of planned executions — what will run, and when."""
+    config = load_config()
     db_path = cfg.ROOT / config.database_path
     conn = sqlite3.connect(db_path)
     try:
@@ -234,36 +361,17 @@ def plan(req: PlanRequest):
     total = done = 0
     truncated = False
 
-    for match in matches:
-        for moment in req.match_moments:
-            for order in req.team_order_types:
-                for model in models:
-                    for prompt_id in req.prompt_ids:
-                        for rep in range(1, req.runs_per_combination + 1):
-                            total += 1
-                            run_id = make_run_id(
-                                match.match_id, model["key"], prompt_id,
-                                order, rep, moment,
-                            )
-                            already = run_id in existing
-                            if already:
-                                done += 1
-                            if len(rows) < CAP:
-                                rows.append({
-                                    "run_id": run_id,
-                                    "match_id": match.match_id,
-                                    "teams": f"{match.team_1} vs {match.team_2}",
-                                    "kickoff_local": match.kickoff_local,
-                                    "scheduled_local": _scheduled_local(match.kickoff_local, moment),
-                                    "model": model["key"],
-                                    "prompt_id": prompt_id,
-                                    "team_order_type": order,
-                                    "match_moment": moment,
-                                    "repetition_number": rep,
-                                    "already_done": already,
-                                })
-                            else:
-                                truncated = True
+    for row in _iter_plan(config, req):
+        total += 1
+        already = row["run_id"] in existing
+        if already:
+            done += 1
+        if len(rows) < CAP:
+            row = dict(row)
+            row["already_done"] = already
+            rows.append(row)
+        else:
+            truncated = True
 
     rows.sort(key=lambda r: (r["scheduled_local"] or "9999", str(r["match_id"]), r["model"]))
     return {
@@ -273,6 +381,116 @@ def plan(req: PlanRequest):
         "truncated": truncated,
         "rows": rows,
     }
+
+
+# ── Persisted plan (survives page refresh) ─────────────────────────────────────
+
+def _ensure_planned_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS planned_runs (
+            run_id TEXT PRIMARY KEY,
+            match_id TEXT,
+            teams TEXT,
+            kickoff_local TEXT,
+            scheduled_local TEXT,
+            model TEXT,
+            prompt_id TEXT,
+            team_order_type TEXT,
+            match_moment TEXT,
+            repetition_number INTEGER,
+            created_at TEXT
+        )"""
+    )
+
+
+@app.post("/api/plan/save")
+def save_plan(req: PlanRequest):
+    """Persist the planned grid so it survives a page refresh."""
+    config = load_config()
+    db_path = cfg.ROOT / config.database_path
+    conn = sqlite3.connect(db_path)
+    try:
+        _ensure_planned_table(conn)
+        now = datetime.now(timezone.utc).isoformat()
+        saved = 0
+        for row in _iter_plan(config, req):
+            conn.execute(
+                """INSERT OR IGNORE INTO planned_runs
+                   (run_id, match_id, teams, kickoff_local, scheduled_local,
+                    model, prompt_id, team_order_type, match_moment,
+                    repetition_number, created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                (row["run_id"], row["match_id"], row["teams"],
+                 row["kickoff_local"], row["scheduled_local"], row["model"],
+                 row["prompt_id"], row["team_order_type"], row["match_moment"],
+                 row["repetition_number"], now),
+            )
+            saved += 1
+        conn.commit()
+        total = conn.execute("SELECT COUNT(*) FROM planned_runs").fetchone()[0]
+        return {"added": saved, "total_planned": total}
+    finally:
+        conn.close()
+
+
+@app.get("/api/planned")
+def list_planned(only: str = Query("all", pattern="^(all|pending|done)$")):
+    """List persisted planned runs, flagging which have already executed."""
+    config = load_config()
+    db_path = cfg.ROOT / config.database_path
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        _ensure_planned_table(conn)
+        rows = conn.execute(
+            """SELECT p.*,
+                      f.execution_status AS execution_status,
+                      f.parsed_score_team_1 AS parsed_score_team_1,
+                      f.parsed_score_team_2 AS parsed_score_team_2
+               FROM planned_runs p
+               LEFT JOIN forecast_runs f ON f.run_id = p.run_id
+               ORDER BY (p.scheduled_local IS NULL), p.scheduled_local,
+                        p.match_id, p.model"""
+        ).fetchall()
+        out = []
+        pending = done = 0
+        for r in rows:
+            d = dict(r)
+            d["done"] = d.get("execution_status") is not None
+            if d["done"]:
+                done += 1
+            else:
+                pending += 1
+            out.append(d)
+        if only == "pending":
+            out = [r for r in out if not r["done"]]
+        elif only == "done":
+            out = [r for r in out if r["done"]]
+        return {"total": len(rows), "pending": pending, "done": done, "rows": out}
+    finally:
+        conn.close()
+
+
+@app.post("/api/planned/clear")
+def clear_planned(scope: str = Query("all", pattern="^(all|done)$")):
+    """Clear the persisted plan — everything, or only the already-executed rows."""
+    config = load_config()
+    db_path = cfg.ROOT / config.database_path
+    conn = sqlite3.connect(db_path)
+    try:
+        _ensure_planned_table(conn)
+        if scope == "done":
+            conn.execute(
+                """DELETE FROM planned_runs
+                   WHERE run_id IN (SELECT run_id FROM forecast_runs)"""
+            )
+        else:
+            conn.execute("DELETE FROM planned_runs")
+        conn.commit()
+        remaining = conn.execute("SELECT COUNT(*) FROM planned_runs").fetchone()[0]
+        return {"remaining": remaining}
+    finally:
+        conn.close()
 
 
 class RunRequest(BaseModel):
