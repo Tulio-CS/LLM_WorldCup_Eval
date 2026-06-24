@@ -120,11 +120,18 @@
             <button class="text-xs text-sky-400 hover:text-sky-300" onclick="selectAllMatches(false)">Nenhuma</button>
           </div>
         </div>
+        <div class="flex items-center gap-2 mb-2">
+          <label class="text-xs text-slate-400 whitespace-nowrap">Dia:</label>
+          <select id="day-select" onchange="onDayChange()"
+            class="flex-1 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sm text-slate-200">
+            <option value="">Todos os dias</option>
+          </select>
+        </div>
         <select id="match-select" multiple
           class="w-full bg-slate-800 border border-slate-700 rounded text-sm text-slate-200 px-2 py-1">
           <option disabled>Carregando…</option>
         </select>
-        <p class="text-xs text-slate-500 mt-1">Ctrl+clique para selecionar múltiplas. Sem seleção = todas.</p>
+        <p class="text-xs text-slate-500 mt-1">Escolha um dia para rodar todos os jogos dele, ou Ctrl+clique para selecionar partidas. Sem seleção = todas.</p>
       </div>
 
       <!-- Run button + info -->
@@ -132,6 +139,10 @@
         <button id="run-btn" onclick="startRun()"
           class="bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white font-semibold px-6 py-2 rounded-lg transition text-sm">
           ▶ Rodar
+        </button>
+        <button id="plan-btn" onclick="showPlan()"
+          class="bg-slate-700 hover:bg-slate-600 text-white font-medium px-4 py-2 rounded-lg transition text-sm">
+          📋 Ver plano
         </button>
         <div id="run-status" class="text-sm text-slate-400"></div>
       </div>
@@ -146,6 +157,37 @@
           class="h-72 overflow-y-auto p-3 space-y-0.5 text-slate-300 leading-relaxed">
           <p class="text-slate-600">Aguardando execução…</p>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Plan modal -->
+  <div id="plan-modal" class="hidden fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" onclick="closePlan(event)">
+    <div class="bg-slate-900 border border-slate-700 rounded-xl max-w-4xl w-full max-h-[85vh] flex flex-col" onclick="event.stopPropagation()">
+      <div class="flex justify-between items-center px-6 py-4 border-b border-slate-800">
+        <div>
+          <h3 class="font-semibold text-white">Execuções planejadas</h3>
+          <p id="plan-summary" class="text-xs text-slate-400 mt-1">—</p>
+        </div>
+        <button onclick="closePlan()" class="text-slate-400 hover:text-white text-2xl leading-none">&times;</button>
+      </div>
+      <div class="overflow-y-auto">
+        <table class="w-full text-xs">
+          <thead class="bg-slate-800 text-slate-400 uppercase tracking-wide sticky top-0">
+            <tr>
+              <th class="px-3 py-2 text-left">Quando</th>
+              <th class="px-3 py-2 text-left">Partida</th>
+              <th class="px-3 py-2 text-left">Modelo</th>
+              <th class="px-3 py-2 text-left">Prompt</th>
+              <th class="px-3 py-2 text-center">Ordem</th>
+              <th class="px-3 py-2 text-center">Momento</th>
+              <th class="px-3 py-2 text-center">Status</th>
+            </tr>
+          </thead>
+          <tbody id="plan-body" class="divide-y divide-slate-800 text-slate-300">
+            <tr><td colspan="7" class="px-3 py-6 text-center text-slate-500">—</td></tr>
+          </tbody>
+        </table>
       </div>
     </div>
   </div>
@@ -377,18 +419,61 @@ async function loadModels() {
   });
 }
 
+function matchTime(m) {
+  // kickoff_local looks like "2026-06-11 13:00"; show just HH:MM when present
+  if (!m.kickoff_local) return '';
+  const parts = String(m.kickoff_local).split(' ');
+  return parts.length > 1 ? parts[1].slice(0, 5) : '';
+}
+
+function renderMatchOptions(dayFilter) {
+  const sel = document.getElementById('match-select');
+  const list = dayFilter ? allMatches.filter(m => m.date === dayFilter) : allMatches;
+  sel.innerHTML = list.map(m => {
+    const t = matchTime(m);
+    const when = m.date ? `${m.date}${t ? ' ' + t : ''}` : '';
+    return `<option value="${m.match_id}">${m.match_id}. ${m.team_1} vs ${m.team_2} — ${m.phase}${when ? ' · ' + when : ''}</option>`;
+  }).join('');
+}
+
 async function loadMatches() {
   const res = await fetch('/api/matches');
   allMatches = await res.json();
 
-  const sel = document.getElementById('match-select');
-  sel.innerHTML = allMatches.map(m =>
-    `<option value="${m.match_id}">${m.match_id}. ${m.team_1} vs ${m.team_2} — ${m.phase}</option>`
-  ).join('');
+  renderMatchOptions('');
+
+  // Populate day selector with distinct dates (sorted)
+  const days = [...new Set(allMatches.map(m => m.date).filter(Boolean))].sort();
+  const daySel = document.getElementById('day-select');
+  daySel.innerHTML = '<option value="">Todos os dias</option>' +
+    days.map(d => {
+      const n = allMatches.filter(m => m.date === d).length;
+      return `<option value="${d}">${d} (${n} jogo${n === 1 ? '' : 's'})</option>`;
+    }).join('');
 
   const mm = document.getElementById('m-match');
   mm.innerHTML = '<option disabled selected>Selecione…</option>' +
     allMatches.map(m => `<option value="${m.match_id}">${m.match_id}. ${m.team_1} vs ${m.team_2}</option>`).join('');
+}
+
+// When a day is chosen: narrow the match list to that day and select all of it.
+function onDayChange() {
+  const day = document.getElementById('day-select').value;
+  renderMatchOptions(day);
+  const sel = document.getElementById('match-select');
+  for (const o of sel.options) o.selected = !!day; // select all of the day; none when "Todos"
+}
+
+// Build the match/day selection used by both Rodar and Ver plano.
+// Priority: a chosen day => send {dates:[day]} (runs all matches of the day).
+// Otherwise, any explicitly selected matches => {match_ids:[...]}.
+// Nothing selected => {} (all matches).
+function buildSelection() {
+  const day = document.getElementById('day-select').value;
+  if (day) return { dates: [day], match_ids: null };
+  const sel = document.getElementById('match-select');
+  const ids = [...sel.selectedOptions].map(o => o.value);
+  return { dates: null, match_ids: ids.length ? ids : null };
 }
 
 async function loadPrompts() {
@@ -470,12 +555,12 @@ async function startRun() {
   const moments = [...document.querySelectorAll('.moment-cb:checked')].map(cb => cb.value);
   if (!moments.length) { alert('Selecione pelo menos um momento.'); return; }
 
-  const sel = document.getElementById('match-select');
-  const matchIds = [...sel.selectedOptions].map(o => o.value);
+  const { match_ids, dates } = buildSelection();
 
   const body = {
     model_keys: modelKeys,
-    match_ids: matchIds.length ? matchIds : null,
+    match_ids,
+    dates,
     prompt_ids: promptIds,
     team_order_types: orders,
     match_moments: moments,
@@ -521,6 +606,83 @@ function finishRun() {
   document.getElementById('run-btn').disabled = false;
   document.getElementById('run-btn').textContent = '▶ Rodar';
   loadStats();
+}
+
+// ── Plano (preview das execuções planejadas) ────────────────────────────────
+async function showPlan() {
+  const modelKeys = [...document.querySelectorAll('.model-cb:checked')].map(cb => cb.value);
+  if (!modelKeys.length) { alert('Selecione pelo menos um modelo.'); return; }
+  const promptIds = [...document.querySelectorAll('.prompt-cb:checked')].map(cb => cb.value);
+  if (!promptIds.length) { alert('Selecione pelo menos um prompt.'); return; }
+  const orders = [];
+  if (document.getElementById('order-original').checked) orders.push('original');
+  if (document.getElementById('order-reversed').checked) orders.push('reversed');
+  if (!orders.length) { alert('Selecione pelo menos uma ordem.'); return; }
+  const moments = [...document.querySelectorAll('.moment-cb:checked')].map(cb => cb.value);
+  if (!moments.length) { alert('Selecione pelo menos um momento.'); return; }
+
+  const { match_ids, dates } = buildSelection();
+  const body = {
+    model_keys: modelKeys,
+    match_ids,
+    dates,
+    prompt_ids: promptIds,
+    team_order_types: orders,
+    match_moments: moments,
+    runs_per_combination: parseInt(document.getElementById('reps').value) || 1,
+  };
+
+  const modal = document.getElementById('plan-modal');
+  modal.classList.remove('hidden');
+  document.getElementById('plan-summary').textContent = 'Calculando…';
+  document.getElementById('plan-body').innerHTML =
+    '<tr><td colspan="7" class="px-3 py-6 text-center text-slate-500">Carregando…</td></tr>';
+
+  let data;
+  try {
+    const res = await fetch('/api/plan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    data = await res.json();
+  } catch (e) {
+    document.getElementById('plan-summary').textContent = 'Erro ao calcular o plano.';
+    document.getElementById('plan-body').innerHTML =
+      `<tr><td colspan="7" class="px-3 py-6 text-center text-red-400">${e}</td></tr>`;
+    return;
+  }
+
+  document.getElementById('plan-summary').innerHTML =
+    `<span class="text-white font-semibold">${data.total}</span> execuções planejadas · ` +
+    `<span class="text-sky-400 font-semibold">${data.to_run}</span> a rodar · ` +
+    `<span class="text-slate-400">${data.already_done}</span> já no banco` +
+    (data.truncated ? ` · <span class="text-amber-400">(mostrando as primeiras ${data.rows.length})</span>` : '');
+
+  const body_el = document.getElementById('plan-body');
+  if (!data.rows.length) {
+    body_el.innerHTML = '<tr><td colspan="7" class="px-3 py-6 text-center text-slate-500">Nada para rodar</td></tr>';
+    return;
+  }
+  body_el.innerHTML = data.rows.map(r => {
+    const badge = r.already_done
+      ? '<span class="status-skipped font-medium">já existe</span>'
+      : '<span class="status-success font-medium">novo</span>';
+    return `<tr class="${r.already_done ? 'opacity-50' : ''}">
+      <td class="px-3 py-1.5 whitespace-nowrap font-mono text-slate-300">${r.scheduled_local || '—'}</td>
+      <td class="px-3 py-1.5 whitespace-nowrap">${r.teams}</td>
+      <td class="px-3 py-1.5 font-mono">${r.model}</td>
+      <td class="px-3 py-1.5 text-slate-400 max-w-[120px] truncate" title="${r.prompt_id}">${r.prompt_id}</td>
+      <td class="px-3 py-1.5 text-center text-slate-500">${r.team_order_type?.[0] || '—'}</td>
+      <td class="px-3 py-1.5 text-center text-slate-400 whitespace-nowrap">${momentLabel(r.match_moment)}</td>
+      <td class="px-3 py-1.5 text-center">${badge}</td>
+    </tr>`;
+  }).join('');
+}
+
+function closePlan(event) {
+  if (event && event.target !== event.currentTarget) return;
+  document.getElementById('plan-modal').classList.add('hidden');
 }
 
 // ── Results tab ────────────────────────────────────────────────────────────

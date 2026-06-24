@@ -31,6 +31,17 @@ MOMENT_LABELS: dict[str, str] = {
     "post_match": "right after the final whistle, with the match finished",
 }
 
+# Approximate wall-clock offset (in minutes) from kickoff for each moment, used
+# by the planner to show *when* each run is intended to fire:
+#   pre_match  -> a few minutes before kickoff
+#   halftime   -> ~end of the first half / start of the break
+#   post_match -> ~final whistle (90' + stoppage)
+MOMENT_OFFSET_MINUTES: dict[str, int] = {
+    "pre_match": -5,
+    "halftime": 55,
+    "post_match": 115,
+}
+
 
 def context_header(kickoff: str | None, moment: str | None) -> str:
     """Build the context block prepended to every prompt.

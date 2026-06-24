@@ -9,7 +9,7 @@ import sqlite3
 import threading
 import traceback
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -20,9 +20,13 @@ from sse_starlette.sse import EventSourceResponse
 
 from fifa_forecast import config as cfg
 from fifa_forecast.config import load_config
-from fifa_forecast.matches import load_matches
+from fifa_forecast.matches import filter_matches, load_matches
 from fifa_forecast.parsing import parse_forecast
-from fifa_forecast.prompts import MATCH_MOMENTS, PROMPT_TEMPLATES
+from fifa_forecast.prompts import (
+    MATCH_MOMENTS,
+    MOMENT_OFFSET_MINUTES,
+    PROMPT_TEMPLATES,
+)
 from fifa_forecast.runner import ExperimentRunner, make_run_id
 from fifa_forecast.storage import Database, FileArchive, RunRecord
 
@@ -67,6 +71,7 @@ def get_matches():
             "team_2": m.team_2,
             "phase": m.phase,
             "kickoff_local": m.kickoff_local,
+            "date": m.local_date,
         }
         for m in matches
     ]
@@ -178,9 +183,102 @@ def get_run(run_id: str):
 
 # ── Execute experiment ────────────────────────────────────────────────────────
 
+def _parse_local(value: str | None) -> datetime | None:
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime((value or "").strip(), fmt)
+        except (ValueError, AttributeError):
+            continue
+    return None
+
+
+def _scheduled_local(kickoff_local: str | None, moment: str) -> str | None:
+    """When this run is intended to fire = kickoff (local) + moment offset."""
+    dt = _parse_local(kickoff_local)
+    if dt is None:
+        return None
+    dt += timedelta(minutes=MOMENT_OFFSET_MINUTES.get(moment, 0))
+    return dt.strftime("%Y-%m-%d %H:%M")
+
+
+class PlanRequest(BaseModel):
+    model_keys: list[str]
+    match_ids: Optional[list[str]] = None
+    dates: Optional[list[str]] = None
+    prompt_ids: list[str]
+    team_order_types: list[str] = ["original", "reversed"]
+    match_moments: list[str] = ["pre_match"]
+    runs_per_combination: int = 1
+
+
+@app.post("/api/plan")
+def plan(req: PlanRequest):
+    """Preview the full grid of planned executions — what will run, and when."""
+    config = load_config()
+    matches = load_matches(cfg.ROOT / config.matches_csv)
+    matches = filter_matches(matches, dates=req.dates, match_ids=req.match_ids)
+    models = [
+        m for m in config.models
+        if m["key"] in req.model_keys and m.get("enabled", True)
+    ]
+
+    db_path = cfg.ROOT / config.database_path
+    conn = sqlite3.connect(db_path)
+    try:
+        existing = {row[0] for row in conn.execute("SELECT run_id FROM forecast_runs")}
+    finally:
+        conn.close()
+
+    CAP = 3000
+    rows: list[dict] = []
+    total = done = 0
+    truncated = False
+
+    for match in matches:
+        for moment in req.match_moments:
+            for order in req.team_order_types:
+                for model in models:
+                    for prompt_id in req.prompt_ids:
+                        for rep in range(1, req.runs_per_combination + 1):
+                            total += 1
+                            run_id = make_run_id(
+                                match.match_id, model["key"], prompt_id,
+                                order, rep, moment,
+                            )
+                            already = run_id in existing
+                            if already:
+                                done += 1
+                            if len(rows) < CAP:
+                                rows.append({
+                                    "run_id": run_id,
+                                    "match_id": match.match_id,
+                                    "teams": f"{match.team_1} vs {match.team_2}",
+                                    "kickoff_local": match.kickoff_local,
+                                    "scheduled_local": _scheduled_local(match.kickoff_local, moment),
+                                    "model": model["key"],
+                                    "prompt_id": prompt_id,
+                                    "team_order_type": order,
+                                    "match_moment": moment,
+                                    "repetition_number": rep,
+                                    "already_done": already,
+                                })
+                            else:
+                                truncated = True
+
+    rows.sort(key=lambda r: (r["scheduled_local"] or "9999", str(r["match_id"]), r["model"]))
+    return {
+        "total": total,
+        "already_done": done,
+        "to_run": total - done,
+        "truncated": truncated,
+        "rows": rows,
+    }
+
+
 class RunRequest(BaseModel):
     model_keys: list[str]
     match_ids: Optional[list[str]] = None
+    dates: Optional[list[str]] = None
     prompt_ids: list[str]
     team_order_types: list[str] = ["original", "reversed"]
     match_moments: list[str] = ["pre_match"]
@@ -207,7 +305,7 @@ def start_run(req: RunRequest):
                 log_q.put({"type": "log", "message": msg})
 
             runner = ExperimentRunner(config, progress=_log, overwrite=req.overwrite)
-            stats = runner.run(match_ids=req.match_ids)
+            stats = runner.run(match_ids=req.match_ids, dates=req.dates)
             log_q.put({"type": "done", "stats": stats})
         except Exception:
             log_q.put({"type": "error", "message": traceback.format_exc()})
