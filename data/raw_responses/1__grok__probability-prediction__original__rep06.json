@@ -1,0 +1,49 @@
+{
+  "raw_text": "{\n  \"score_team_1\": 3,\n  \"score_team_2\": 0,\n  \"team1_win_probability\": 80,\n  \"draw_probability\": 15,\n  \"team2_win_probability\": 5\n}",
+  "response": {
+    "id": "99ce5e8a-f262-999b-a43e-700c24a25b8a",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"score_team_1\": 3,\n  \"score_team_2\": 0,\n  \"team1_win_probability\": 80,\n  \"draw_probability\": 15,\n  \"team2_win_probability\": 5\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null,
+          "reasoning_content": "The task is to forecast Argentina vs Austria in FIFA World Cup 2026. I need to return ONLY a valid JSON object with specific fields.\nFirst, the output must be ONLY a valid JSON object, nothing else. No explanations, no text before or after."
+        }
+      }
+    ],
+    "created": 1782119424,
+    "model": "grok-4.3",
+    "object": "chat.completion",
+    "moderation": null,
+    "service_tier": "default",
+    "system_fingerprint": "fp_eb3c003fc66c14ed",
+    "usage": {
+      "completion_tokens": 50,
+      "prompt_tokens": 306,
+      "total_tokens": 794,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 438,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 256,
+        "text_tokens": 306,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 13337000
+    },
+    "_request_id": "99ce5e8a-f262-999b-a43e-700c24a25b8a"
+  }
+}

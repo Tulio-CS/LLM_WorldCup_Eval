@@ -1,0 +1,82 @@
+{
+  "raw_text": "{\n  \"score_team_1\": 2,\n  \"score_team_2\": 0,\n  \"team1_win_probability\": 70,\n  \"draw_probability\": 20,\n  \"team2_win_probability\": 10,\n  \"white_hat\": \"Argentina enters the 2026 World Cup as the reigning champions, consistently ranked among the top two FIFA nations. Their squad boasts an unparalleled blend of experience and emerging talent, with key players like Lionel Messi, Emiliano Martínez, and Julian Álvarez maintaining elite form. Their recent qualification campaigns and friendly matches show a strong defensive record and efficient attack. Austria, while a rising force in European football, typically holds a FIFA ranking between 20th and 25th. They performed commendably in Euro qualifiers, showcasing tactical discipline under Ralf Rangnick, but lack the top-tier World Cup knockout stage experience.\",\n  \"red_hat\": \"The emotional momentum heavily favors Argentina, still riding the high of their 2022 triumph. There's an undeniable aura of confidence and belief surrounding the squad, especially with what could be Messi's final World Cup push, inspiring an emotional surge. Austria, while enthusiastic and playing with an underdog spirit, might feel the immense pressure and psychological burden of facing the world champions. The sheer presence of Argentina's star players can be intimidating, potentially affecting Austria's natural game, despite their recent positive run.\",\n  \"black_hat\": \"Argentina's main risks include potential complacency after their recent success, a reliance on aging key players like Messi who might not maintain peak physical output for an entire tournament, and the immense pressure of defending the title. There's also the possibility of underestimating an organized Austrian side. For Austria, the primary weaknesses are a significant gap in individual quality compared to Argentina's elite, a lack of experience in deep World Cup runs, and the potential for their high-pressing system to be exposed by Argentina's technical midfielders and quick transitions. An early concession could deflate their spirit quickly.\",\n  \"yellow_hat\": \"Argentina's strengths are manifold: a technically gifted squad, a world-class goalkeeper, a cohesive defense, and an attack spearheaded by one of football's greatest. Their extensive experience in high-stakes matches provides a significant advantage in managing game pressure. Opportunities arise from Austria's potential over-commitment in pressing, which Argentina can exploit with quick passing and Messi's vision. Their ability to control possession and dictate tempo will wear down Austria, opening up chances. The depth of their squad also allows for crucial tactical adjustments.\",\n  \"green_hat\": \"An unexpected scenario could see Austria implement a highly unorthodox tactical setup, perhaps a man-marking system on Messi combined with an extremely deep block, frustrating Argentina and forcing them into speculative shots. Another possibility involves an early red card for an Argentinian defender, dramatically altering the game's dynamics and forcing a complete strategic overhaul. A stunning individual error from an Argentinian player could gift Austria an early lead against the run of play, sparking an unlikely comeback story or making the game far more competitive than anticipated.\",\n  \"blue_hat\": \"Combining insights from all hats, Argentina's superior quality, experience, and current form (White Hat) position them as clear favorites. Their psychological edge and winning mentality (Red Hat) further bolster this. While risks exist, such as potential complacency or Austria's disciplined setup (Black Hat), Argentina's technical brilliance, tactical flexibility, and ability to exploit weaknesses (Yellow Hat) are expected to prevail. Even considering unconventional scenarios like an early red card or tactical surprises from Austria (Green Hat), Argentina's depth and resilience are likely to overcome such challenges. Therefore, the forecast is an Argentina win, with a score of 2-0 reflecting their defensive solidity and attacking prowess, while acknowledging Austria's ability to be organized. The probabilities are 70% for Argentina, 20% for a draw, and 10% for Austria, as Austria might make it tough but ultimately lack the firepower to overcome the world champions.\"\n}",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Mon, 22 Jun 2026 09:09:34 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=23063",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"score_team_1\": 2,\n  \"score_team_2\": 0,\n  \"team1_win_probability\": 70,\n  \"draw_probability\": 20,\n  \"team2_win_probability\": 10,\n  \"white_hat\": \"Argentina enters the 2026 World Cup as the reigning champions, consistently ranked among the top two FIFA nations. Their squad boasts an unparalleled blend of experience and emerging talent, with key players like Lionel Messi, Emiliano Martínez, and Julian Álvarez maintaining elite form. Their recent qualification campaigns and friendly matches show a strong defensive record and efficient attack. Austria, while a rising force in European football, typically holds a FIFA ranking between 20th and 25th. They performed commendably in Euro qualifiers, showcasing tactical discipline under Ralf Rangnick, but lack the top-tier World Cup knockout stage experience.\",\n  \"red_hat\": \"The emotional momentum heavily favors Argentina, still riding the high of their 2022 triumph. There's an undeniable aura of confidence and belief surrounding the squad, especially with what could be Messi's final World Cup push, inspiring an emotional surge. Austria, while enthusiastic and playing with an underdog spirit, might feel the immense pressure and psychological burden of facing the world champions. The sheer presence of Argentina's star players can be intimidating, potentially affecting Austria's natural game, despite their recent positive run.\",\n  \"black_hat\": \"Argentina's main risks include potential complacency after their recent success, a reliance on aging key players like Messi who might not maintain peak physical output for an entire tournament, and the immense pressure of defending the title. There's also the possibility of underestimating an organized Austrian side. For Austria, the primary weaknesses are a significant gap in individual quality compared to Argentina's elite, a lack of experience in deep World Cup runs, and the potential for their high-pressing system to be exposed by Argentina's technical midfielders and quick transitions. An early concession could deflate their spirit quickly.\",\n  \"yellow_hat\": \"Argentina's strengths are manifold: a technically gifted squad, a world-class goalkeeper, a cohesive defense, and an attack spearheaded by one of football's greatest. Their extensive experience in high-stakes matches provides a significant advantage in managing game pressure. Opportunities arise from Austria's potential over-commitment in pressing, which Argentina can exploit with quick passing and Messi's vision. Their ability to control possession and dictate tempo will wear down Austria, opening up chances. The depth of their squad also allows for crucial tactical adjustments.\",\n  \"green_hat\": \"An unexpected scenario could see Austria implement a highly unorthodox tactical setup, perhaps a man-marking system on Messi combined with an extremely deep block, frustrating Argentina and forcing them into speculative shots. Another possibility involves an early red card for an Argentinian defender, dramatically altering the game's dynamics and forcing a complete strategic overhaul. A stunning individual error from an Argentinian player could gift Austria an early lead against the run of play, sparking an unlikely comeback story or making the game far more competitive than anticipated.\",\n  \"blue_hat\": \"Combining insights from all hats, Argentina's superior quality, experience, and current form (White Hat) position them as clear favorites. Their psychological edge and winning mentality (Red Hat) further bolster this. While risks exist, such as potential complacency or Austria's disciplined setup (Black Hat), Argentina's technical brilliance, tactical flexibility, and ability to exploit weaknesses (Yellow Hat) are expected to prevail. Even considering unconventional scenarios like an early red card or tactical surprises from Austria (Green Hat), Argentina's depth and resilience are likely to overcome such challenges. Therefore, the forecast is an Argentina win, with a score of 2-0 reflecting their defensive solidity and attacking prowess, while acknowledging Austria's ability to be organized. The probabilities are 70% for Argentina, 20% for a draw, and 10% for Austria, as Austria might make it tough but ultimately lack the firepower to overcome the world champions.\"\n}",
+              "thought": null,
+              "thought_signature": null,
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-2.5-flash",
+    "prompt_feedback": null,
+    "response_id": "t_s4at3kHN6Bz7IP2vCriQs",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 855,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 418,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 418
+        }
+      ],
+      "thoughts_token_count": 1669,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 2942,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  }
+}

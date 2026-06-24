@@ -1,0 +1,49 @@
+{
+  "raw_text": "{\n  \"score_team_1\": 3,\n  \"score_team_2\": 0\n}",
+  "response": {
+    "id": "a26bea18-3cb7-952d-9cd2-ab7e228c8f42",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"score_team_1\": 3,\n  \"score_team_2\": 0\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null,
+          "reasoning_content": "The task is to forecast a FIFA World Cup 2026 match between Argentina and Austria. I need to predict the result and return ONLY a valid JSON object with \"score_team_1\" and \"score_team_2\", which are in..."
+        }
+      }
+    ],
+    "created": 1782119387,
+    "model": "grok-4.3",
+    "object": "chat.completion",
+    "moderation": null,
+    "service_tier": "default",
+    "system_fingerprint": "fp_eb3c003fc66c14ed",
+    "usage": {
+      "completion_tokens": 22,
+      "prompt_tokens": 235,
+      "total_tokens": 555,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 298,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 192,
+        "text_tokens": 235,
+        "image_tokens": 0
+      },
+      "num_sources_used": 0,
+      "cost_in_usd_ticks": 8921500
+    },
+    "_request_id": "a26bea18-3cb7-952d-9cd2-ab7e228c8f42"
+  }
+}

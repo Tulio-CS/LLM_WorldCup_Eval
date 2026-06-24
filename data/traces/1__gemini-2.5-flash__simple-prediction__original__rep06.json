@@ -1,0 +1,27 @@
+{
+  "usage": {
+    "cache_tokens_details": null,
+    "cached_content_token_count": null,
+    "candidates_token_count": 26,
+    "candidates_tokens_details": null,
+    "prompt_token_count": 95,
+    "prompt_tokens_details": [
+      {
+        "modality": "TEXT",
+        "token_count": 95
+      }
+    ],
+    "thoughts_token_count": 169,
+    "tool_use_prompt_token_count": null,
+    "tool_use_prompt_tokens_details": null,
+    "total_token_count": 290,
+    "traffic_type": null
+  },
+  "candidates": [
+    {
+      "finish_reason": "FinishReason.STOP",
+      "safety_ratings": []
+    }
+  ],
+  "prompt_feedback": null
+}

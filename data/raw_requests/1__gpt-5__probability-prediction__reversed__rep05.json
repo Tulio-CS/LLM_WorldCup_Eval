@@ -1,0 +1,18 @@
+{
+  "model": "gpt-5",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are an expert football (soccer) analyst forecasting FIFA World Cup 2026 matches. Follow the output format exactly and return only what is requested."
+    },
+    {
+      "role": "user",
+      "content": "You are forecasting a FIFA World Cup 2026 match.\n\nPredict the result the match Austria vs Argentina.\n\nReturn ONLY a valid JSON object:\n\n{\n  \"score_team_1\": <integer>,\n  \"score_team_2\": <integer>,\n  \"team1_win_probability\": <integer>,\n  \"draw_probability\": <integer>,\n  \"team2_win_probability\": <integer>\n}\n\nRequirements:\n- Scores must be non-negative integers.\n- Probabilities must be integers between 0 and 100.\n- The three probabilities must sum exactly to 100.\n- Output only the JSON object and nothing else."
+    }
+  ],
+  "reasoning_effort": "medium",
+  "max_completion_tokens": 8000,
+  "response_format": {
+    "type": "json_object"
+  }
+}

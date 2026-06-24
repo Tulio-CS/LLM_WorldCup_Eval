@@ -1,0 +1,23 @@
+{
+  "usage": {
+    "completion_tokens": 456,
+    "prompt_tokens": 517,
+    "total_tokens": 1286,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": 0,
+      "audio_tokens": 0,
+      "reasoning_tokens": 313,
+      "rejected_prediction_tokens": 0
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 512,
+      "text_tokens": 517,
+      "image_tokens": 0
+    },
+    "num_sources_used": 0,
+    "cost_in_usd_ticks": 20311500
+  },
+  "system_fingerprint": "fp_eb3c003fc66c14ed",
+  "request_id": "8a6192db-16af-906c-9499-1df8ffb4e8f0"
+}

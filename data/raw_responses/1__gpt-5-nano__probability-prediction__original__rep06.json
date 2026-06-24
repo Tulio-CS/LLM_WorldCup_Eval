@@ -1,0 +1,44 @@
+{
+  "raw_text": "{\n  \"score_team_1\": 2,\n  \"score_team_2\": 0,\n  \"team1_win_probability\": 60,\n  \"draw_probability\": 20,\n  \"team2_win_probability\": 20\n}",
+  "response": {
+    "id": "chatcmpl-DtUVTTLLoHkV8c9RpQryUHe3w73Va",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"score_team_1\": 2,\n  \"score_team_2\": 0,\n  \"team1_win_probability\": 60,\n  \"draw_probability\": 20,\n  \"team2_win_probability\": 20\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1782117679,
+    "model": "gpt-5-nano-2025-08-07",
+    "object": "chat.completion",
+    "moderation": null,
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 763,
+      "prompt_tokens": 163,
+      "total_tokens": 926,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 704,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    },
+    "_request_id": "req_d059e26ce947491dac3ea545ec8e4ba9"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "model": "gpt-5",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are an expert football (soccer) analyst forecasting FIFA World Cup 2026 matches. Follow the output format exactly and return only what is requested."
+    },
+    {
+      "role": "user",
+      "content": "You are forecasting a FIFA World Cup 2026 match.\n\nPredict the result of the match Argentina vs Austria.\n\nIn addition to the prediction, provide a justification using Edward de Bono's Six Thinking Hats framework:\n\n* White Hat: objective facts, statistics, rankings, form, and evidence.\n* Red Hat: intuition, emotions, momentum, and subjective impressions.\n* Black Hat: risks, weaknesses, uncertainties, and reasons the prediction could be wrong.\n* Yellow Hat: strengths, opportunities, and reasons supporting the predicted outcome.\n* Green Hat: creative, unconventional, or unexpected scenarios that could influence the match.\n* Blue Hat: process control, synthesis, and final judgment. Integrate insights from all previous hats, resolve conflicts among them, and explain how they lead to the final score prediction and probabilities.\n\nReturn ONLY a valid JSON object in the following format:\n\n{\n\"score_team_1\": <integer>,\n\"score_team_2\": <integer>,\n\"team1_win_probability\": <integer>,\n\"draw_probability\": <integer>,\n\"team2_win_probability\": <integer>,\n\n\"white_hat\": \"<analysis>\",\n\"red_hat\": \"<analysis>\",\n\"black_hat\": \"<analysis>\",\n\"yellow_hat\": \"<analysis>\",\n\"green_hat\": \"<analysis>\",\n\"blue_hat\": \"<analysis>\"\n}\n\nRequirements:\n\n* Scores must be non-negative integers.\n* Probabilities must be integers between 0 and 100.\n* The three probabilities must sum exactly to 100.\n* Each hat must contain at least 30 words.\n* The blue_hat must explicitly explain how the previous five hats were combined to produce the final forecast.\n* Output only the JSON object and nothing else."
+    }
+  ],
+  "reasoning_effort": "medium",
+  "max_completion_tokens": 8000,
+  "response_format": {
+    "type": "json_object"
+  }
+}

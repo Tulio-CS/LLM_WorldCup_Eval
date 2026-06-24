@@ -1,0 +1,44 @@
+{
+  "raw_text": "",
+  "response": {
+    "id": "chatcmpl-DtUa0MOMU8I7o2iRRyxCQ941pTLuH",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1782117960,
+    "model": "gpt-5-nano-2025-08-07",
+    "object": "chat.completion",
+    "moderation": null,
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 8000,
+      "prompt_tokens": 375,
+      "total_tokens": 8375,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 8000,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    },
+    "_request_id": "req_d53c7f3736bb4edda78d9b2e95a25130"
+  }
+}

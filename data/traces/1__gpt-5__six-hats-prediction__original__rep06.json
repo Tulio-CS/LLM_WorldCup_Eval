@@ -1,0 +1,19 @@
+{
+  "usage": {
+    "completion_tokens": 3107,
+    "prompt_tokens": 375,
+    "total_tokens": 3482,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": 0,
+      "audio_tokens": 0,
+      "reasoning_tokens": 2048,
+      "rejected_prediction_tokens": 0
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0
+    }
+  },
+  "system_fingerprint": null,
+  "request_id": "req_595e1b66fb9249a78f57fd0d41ee1936"
+}

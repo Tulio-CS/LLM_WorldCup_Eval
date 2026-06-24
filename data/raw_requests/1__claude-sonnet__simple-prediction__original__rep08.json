@@ -1,0 +1,14 @@
+{
+  "model": "claude-sonnet-4-6",
+  "max_tokens": 8000,
+  "system": "You are an expert football (soccer) analyst forecasting FIFA World Cup 2026 matches. Follow the output format exactly and return only what is requested.",
+  "messages": [
+    {
+      "role": "user",
+      "content": "You are forecasting a FIFA World Cup 2026 match.\n\nPredict the result of the match Argentina vs Austria.\n\nReturn ONLY a valid JSON object:\n\n{\n  \"score_team_1\": <integer>,\n  \"score_team_2\": <integer>\n}"
+    }
+  ],
+  "output_config": {
+    "effort": "medium"
+  }
+}

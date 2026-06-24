@@ -4,10 +4,6 @@
 .env.*
 
 # Generated dataset & artifacts
-fifa_forecasts.db
-fifa_forecasts.db-journal
-experiment_manifest.json
-/data/
 
 # Python
 __pycache__/

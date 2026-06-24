@@ -1,0 +1,82 @@
+{
+  "raw_text": "{\n  \"score_team_1\": 2,\n  \"score_team_2\": 0,\n  \"team1_win_probability\": 75,\n  \"draw_probability\": 15,\n  \"team2_win_probability\": 10,\n  \"white_hat\": \"Argentina is the reigning FIFA World Cup champion, currently holding the #1 spot in FIFA rankings. Their squad boasts an array of world-class talent including Lionel Messi, Lautaro Martinez, and Emiliano Martinez, demonstrating consistent top-tier performance in recent competitive matches like World Cup qualifiers and Copa America. Austria, ranked significantly lower (around #25), has shown improvement under Ralf Rangnick, achieving strong results in Euro 2024 qualification. Key Austrian players include Marcel Sabitzer and Konrad Laimer, though historically they are not a major World Cup power. Argentina's form has been consistently excellent.\",\n  \"red_hat\": \"Argentina approaches this match with the supreme confidence and belief that comes with being world champions, creating an intimidating aura. The passion of the 'Albiceleste' fanbase and the collective drive to defend their title will provide a significant emotional lift. Lionel Messi's presence alone inspires a psychological edge for Argentina and can demoralize opponents. Austria, on the other hand, will likely feel the pressure and excitement of facing a global football superpower, potentially leading to a mixture of awe and determination rather than pure confidence.\",\n  \"black_hat\": \"For Argentina, a primary risk is potential complacency after significant past successes, or an over-reliance on individual brilliance, particularly Lionel Messi, which could leave them vulnerable if he is neutralized. Fatigue among their aging core players in a demanding tournament could also be a factor. Austria's main weaknesses are the significant gap in individual quality compared to Argentina and their relative lack of experience against top-tier opposition in major tournament knockout stages. Rangnick's high-press system, if not perfectly executed, can be exposed by quick, incisive counter-attacks, leading to defensive vulnerabilities.\",\n  \"yellow_hat\": \"Argentina's strengths lie in their unparalleled attacking talent, featuring players capable of individual brilliance and cohesive team play. Their defense is solid and well-organized, supported by an experienced goalkeeper. Under Lionel Scaloni, they possess excellent tactical flexibility and a strong winning mentality, proven in high-stakes matches. The team's chemistry and depth allow for effective rotation and adaptation. For Austria, their major strength is the tactical discipline and well-drilled approach under Ralf Rangnick, enabling intense pressing and quick transitions. They have good cohesion in midfield and can exploit space, playing with less pressure as underdogs.\",\n  \"green_hat\": \"An unexpected scenario could see Austria deploy an ultra-defensive, low-block strategy that completely frustrates Argentina for extended periods, perhaps leading to a shock early goal from a set-piece or a quick counter-attack. Conversely, Argentina might experiment with an unconventional formation or player roles, catching Austria off guard. A controversial referee decision or an early red card for a key player on either side could drastically alter the match dynamics, creating an entirely different game flow. Additionally, unforeseen individual brilliance from an Austrian player, or a moment of defensive lapse from Argentina, could lead to a surprise result.\",\n  \"blue_hat\": \"Synthesizing the insights from all hats, Argentina's overwhelming superiority in terms of facts (White Hat), emotional momentum (Red Hat), and inherent strengths (Yellow Hat) makes them clear favorites. While the Black Hat highlighted potential risks like complacency for Argentina, these are minor compared to Austria's substantial quality gap and lack of experience against such high-caliber opposition. The Yellow Hat acknowledged Austria's tactical discipline under Rangnick, suggesting they won't be easily overrun, but their attacking threat remains limited. The Green Hat considered unexpected scenarios, but these are statistically less probable given Argentina's consistency and depth. Combining these points, Argentina's world-class attack is expected to penetrate Austria's disciplined but ultimately outmatched defense. The Albiceleste's strong defensive record also points to a clean sheet. Therefore, a 2-0 victory for Argentina is the most probable outcome, reflecting their dominance while acknowledging Austria's improved defensive organization, leading to the predicted scores and probabilities.\"\n}",
+  "response": {
+    "sdk_http_response": {
+      "headers": {
+        "x-gemini-service-tier": "standard",
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Mon, 22 Jun 2026 09:08:54 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "server-timing": "gfet4t7; dur=12815",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      },
+      "body": null
+    },
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "media_resolution": null,
+              "code_execution_result": null,
+              "executable_code": null,
+              "file_data": null,
+              "function_call": null,
+              "function_response": null,
+              "inline_data": null,
+              "text": "{\n  \"score_team_1\": 2,\n  \"score_team_2\": 0,\n  \"team1_win_probability\": 75,\n  \"draw_probability\": 15,\n  \"team2_win_probability\": 10,\n  \"white_hat\": \"Argentina is the reigning FIFA World Cup champion, currently holding the #1 spot in FIFA rankings. Their squad boasts an array of world-class talent including Lionel Messi, Lautaro Martinez, and Emiliano Martinez, demonstrating consistent top-tier performance in recent competitive matches like World Cup qualifiers and Copa America. Austria, ranked significantly lower (around #25), has shown improvement under Ralf Rangnick, achieving strong results in Euro 2024 qualification. Key Austrian players include Marcel Sabitzer and Konrad Laimer, though historically they are not a major World Cup power. Argentina's form has been consistently excellent.\",\n  \"red_hat\": \"Argentina approaches this match with the supreme confidence and belief that comes with being world champions, creating an intimidating aura. The passion of the 'Albiceleste' fanbase and the collective drive to defend their title will provide a significant emotional lift. Lionel Messi's presence alone inspires a psychological edge for Argentina and can demoralize opponents. Austria, on the other hand, will likely feel the pressure and excitement of facing a global football superpower, potentially leading to a mixture of awe and determination rather than pure confidence.\",\n  \"black_hat\": \"For Argentina, a primary risk is potential complacency after significant past successes, or an over-reliance on individual brilliance, particularly Lionel Messi, which could leave them vulnerable if he is neutralized. Fatigue among their aging core players in a demanding tournament could also be a factor. Austria's main weaknesses are the significant gap in individual quality compared to Argentina and their relative lack of experience against top-tier opposition in major tournament knockout stages. Rangnick's high-press system, if not perfectly executed, can be exposed by quick, incisive counter-attacks, leading to defensive vulnerabilities.\",\n  \"yellow_hat\": \"Argentina's strengths lie in their unparalleled attacking talent, featuring players capable of individual brilliance and cohesive team play. Their defense is solid and well-organized, supported by an experienced goalkeeper. Under Lionel Scaloni, they possess excellent tactical flexibility and a strong winning mentality, proven in high-stakes matches. The team's chemistry and depth allow for effective rotation and adaptation. For Austria, their major strength is the tactical discipline and well-drilled approach under Ralf Rangnick, enabling intense pressing and quick transitions. They have good cohesion in midfield and can exploit space, playing with less pressure as underdogs.\",\n  \"green_hat\": \"An unexpected scenario could see Austria deploy an ultra-defensive, low-block strategy that completely frustrates Argentina for extended periods, perhaps leading to a shock early goal from a set-piece or a quick counter-attack. Conversely, Argentina might experiment with an unconventional formation or player roles, catching Austria off guard. A controversial referee decision or an early red card for a key player on either side could drastically alter the match dynamics, creating an entirely different game flow. Additionally, unforeseen individual brilliance from an Austrian player, or a moment of defensive lapse from Argentina, could lead to a surprise result.\",\n  \"blue_hat\": \"Synthesizing the insights from all hats, Argentina's overwhelming superiority in terms of facts (White Hat), emotional momentum (Red Hat), and inherent strengths (Yellow Hat) makes them clear favorites. While the Black Hat highlighted potential risks like complacency for Argentina, these are minor compared to Austria's substantial quality gap and lack of experience against such high-caliber opposition. The Yellow Hat acknowledged Austria's tactical discipline under Rangnick, suggesting they won't be easily overrun, but their attacking threat remains limited. The Green Hat considered unexpected scenarios, but these are statistically less probable given Argentina's consistency and depth. Combining these points, Argentina's world-class attack is expected to penetrate Austria's disciplined but ultimately outmatched defense. The Albiceleste's strong defensive record also points to a clean sheet. Therefore, a 2-0 victory for Argentina is the most probable outcome, reflecting their dominance while acknowledging Austria's improved defensive organization, leading to the predicted scores and probabilities.\"\n}",
+              "thought": null,
+              "thought_signature": null,
+              "video_metadata": null,
+              "tool_call": null,
+              "tool_response": null,
+              "part_metadata": null
+            }
+          ],
+          "role": "model"
+        },
+        "citation_metadata": null,
+        "finish_message": null,
+        "token_count": null,
+        "finish_reason": "STOP",
+        "grounding_metadata": null,
+        "avg_logprobs": null,
+        "index": 0,
+        "logprobs_result": null,
+        "safety_ratings": null,
+        "url_context_metadata": null
+      }
+    ],
+    "create_time": null,
+    "model_version": "gemini-2.5-flash",
+    "prompt_feedback": null,
+    "response_id": "mfs4avPcHIHXz7IP2bWS4Qw",
+    "usage_metadata": {
+      "cache_tokens_details": null,
+      "cached_content_token_count": null,
+      "candidates_token_count": 895,
+      "candidates_tokens_details": null,
+      "prompt_token_count": 418,
+      "prompt_tokens_details": [
+        {
+          "modality": "TEXT",
+          "token_count": 418
+        }
+      ],
+      "thoughts_token_count": 1260,
+      "tool_use_prompt_token_count": null,
+      "tool_use_prompt_tokens_details": null,
+      "total_token_count": 2573,
+      "traffic_type": null
+    },
+    "model_status": null,
+    "automatic_function_calling_history": [],
+    "parsed": null
+  }
+}

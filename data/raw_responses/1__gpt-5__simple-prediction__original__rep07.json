@@ -1,0 +1,44 @@
+{
+  "raw_text": "{\n  \"score_team_1\": 2,\n  \"score_team_2\": 1\n}",
+  "response": {
+    "id": "chatcmpl-DtUHaC9nIwhKVLaj5jwxd8WXejiJw",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "logprobs": null,
+        "message": {
+          "content": "{\n  \"score_team_1\": 2,\n  \"score_team_2\": 1\n}",
+          "refusal": null,
+          "role": "assistant",
+          "annotations": [],
+          "audio": null,
+          "function_call": null,
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1782116818,
+    "model": "gpt-5-2025-08-07",
+    "object": "chat.completion",
+    "moderation": null,
+    "service_tier": "default",
+    "system_fingerprint": null,
+    "usage": {
+      "completion_tokens": 223,
+      "prompt_tokens": 92,
+      "total_tokens": 315,
+      "completion_tokens_details": {
+        "accepted_prediction_tokens": 0,
+        "audio_tokens": 0,
+        "reasoning_tokens": 192,
+        "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens_details": {
+        "audio_tokens": 0,
+        "cached_tokens": 0
+      }
+    },
+    "_request_id": "req_b4cd301b77b649b6890f79079c5e9229"
+  }
+}
