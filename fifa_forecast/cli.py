@@ -117,6 +117,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         total = (
             len(matches)
             * len(config.team_order_types)
+            * len(config.match_moments)
             * len(config.enabled_models())
             * len(config.prompt_ids)
             * config.runs_per_combination
@@ -134,6 +135,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Enabled models:        {len(config.enabled_models())}")
         print(f"Prompt strategies:     {len(config.prompt_ids)}")
         print(f"Team orderings:        {len(config.team_order_types)}")
+        print(f"Match moments:         {len(config.match_moments)} ({', '.join(config.match_moments)})")
         print(f"Repetitions/combo:     {config.runs_per_combination}")
         print(f"Planned executions:    {total}")
         return 0

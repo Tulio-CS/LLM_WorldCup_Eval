@@ -28,6 +28,7 @@ FORECAST_COLUMNS: list[tuple[str, str]] = [
     ("team_2", "TEXT"),
     ("kickoff_datetime", "TEXT"),
     ("team_order_type", "TEXT"),
+    ("match_moment", "TEXT"),  # pre_match | halftime | post_match
     ("prompt_team_1", "TEXT"),  # team presented first in the prompt
     ("prompt_team_2", "TEXT"),  # team presented second in the prompt
     ("provider", "TEXT"),
@@ -93,6 +94,7 @@ class RunRecord:
     team_2: str | None = None
     kickoff_datetime: str | None = None
     team_order_type: str | None = None
+    match_moment: str | None = None
     prompt_team_1: str | None = None
     prompt_team_2: str | None = None
     provider: str | None = None
@@ -159,11 +161,29 @@ class Database:
     def _init_schema(self) -> None:
         cols_sql = ",\n  ".join(f"{name} {ctype}" for name, ctype in FORECAST_COLUMNS)
         self.conn.execute(f"CREATE TABLE IF NOT EXISTS forecast_runs (\n  {cols_sql}\n)")
+        self._migrate()
         for col in ("match_id", "model", "prompt_id", "team_order_type", "execution_status"):
             self.conn.execute(
                 f"CREATE INDEX IF NOT EXISTS idx_forecast_{col} "
                 f"ON forecast_runs ({col})"
             )
+        self.conn.commit()
+
+    def _migrate(self) -> None:
+        """Add any columns missing from a pre-existing database.
+
+        SQLite only supports appending columns, so new fields are added at the
+        end physically; inserts use explicit column names, so position is
+        irrelevant. Safe to run on every startup.
+        """
+        existing = {row[1] for row in self.conn.execute("PRAGMA table_info(forecast_runs)")}
+        for name, ctype in FORECAST_COLUMNS:
+            if name not in existing:
+                # Strip "PRIMARY KEY" — cannot be added via ALTER TABLE.
+                col_type = ctype.replace("PRIMARY KEY", "").strip() or "TEXT"
+                self.conn.execute(
+                    f"ALTER TABLE forecast_runs ADD COLUMN {name} {col_type}"
+                )
         self.conn.commit()
 
     def insert_run(self, record: RunRecord) -> None:

@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>FIFA WC 2026 — LLM Eval</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { font-family: 'Inter', system-ui, sans-serif; }
+  #log-output { font-family: 'Fira Code', 'Consolas', monospace; font-size: 0.78rem; }
+  .tab-btn.active { border-bottom: 2px solid #38bdf8; color: #38bdf8; }
+  .status-success { color: #4ade80; }
+  .status-error   { color: #f87171; }
+  .status-manual  { color: #a78bfa; }
+  .status-skipped { color: #94a3b8; }
+  tr:hover td { background: #1e293b; }
+  select[multiple] { height: 9rem; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: #0f172a; }
+  ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+</style>
+</head>
+<body class="bg-slate-950 text-slate-200 min-h-screen">
+
+<!-- Header -->
+<header class="bg-slate-900 border-b border-slate-800 px-6 py-3 flex items-center justify-between">
+  <div class="flex items-center gap-3">
+    <span class="text-2xl">⚽</span>
+    <div>
+      <h1 class="text-lg font-bold text-white leading-tight">FIFA WC 2026 — LLM Eval</h1>
+      <p class="text-xs text-slate-400">Benchmark de previsões com múltiplos modelos</p>
+    </div>
+  </div>
+  <div id="stats-bar" class="flex gap-4 text-sm">
+    <span class="text-slate-400">Total: <strong id="s-total" class="text-white">—</strong></span>
+    <span class="text-slate-400">OK: <strong id="s-ok" class="text-green-400">—</strong></span>
+    <span class="text-slate-400">Erros: <strong id="s-err" class="text-red-400">—</strong></span>
+  </div>
+</header>
+
+<!-- Tabs -->
+<nav class="bg-slate-900 border-b border-slate-800 px-6 flex gap-1">
+  <button class="tab-btn active px-4 py-2 text-sm font-medium text-slate-300 hover:text-white transition" onclick="showTab('run')">Rodar</button>
+  <button class="tab-btn px-4 py-2 text-sm font-medium text-slate-300 hover:text-white transition" onclick="showTab('results')">Resultados</button>
+  <button class="tab-btn px-4 py-2 text-sm font-medium text-slate-300 hover:text-white transition" onclick="showTab('manual')">Inserir Manual</button>
+</nav>
+
+<!-- ═══════════════════════ TAB: RODAR ═══════════════════════ -->
+<div id="tab-run" class="tab-pane p-6 max-w-7xl mx-auto">
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+    <!-- Left column: config -->
+    <div class="lg:col-span-1 space-y-4">
+
+      <!-- Models -->
+      <div class="bg-slate-900 rounded-lg p-4 border border-slate-800">
+        <h2 class="text-sm font-semibold text-slate-300 mb-3 uppercase tracking-wide">Modelos</h2>
+        <div id="model-list" class="space-y-1.5 text-sm">
+          <p class="text-slate-500 text-xs">Carregando…</p>
+        </div>
+        <div class="mt-3 flex gap-2">
+          <button class="text-xs text-sky-400 hover:text-sky-300" onclick="selectAllModels(true)">Todos</button>
+          <span class="text-slate-600">|</span>
+          <button class="text-xs text-sky-400 hover:text-sky-300" onclick="selectAllModels(false)">Nenhum</button>
+        </div>
+      </div>
+
+      <!-- Prompts -->
+      <div class="bg-slate-900 rounded-lg p-4 border border-slate-800">
+        <h2 class="text-sm font-semibold text-slate-300 mb-3 uppercase tracking-wide">Prompts</h2>
+        <div id="prompt-list" class="space-y-1.5 text-sm">
+          <p class="text-slate-500 text-xs">Carregando…</p>
+        </div>
+      </div>
+
+      <!-- Moments -->
+      <div class="bg-slate-900 rounded-lg p-4 border border-slate-800">
+        <h2 class="text-sm font-semibold text-slate-300 mb-3 uppercase tracking-wide">Momentos do jogo</h2>
+        <div id="moment-list" class="space-y-1.5 text-sm">
+          <p class="text-slate-500 text-xs">Carregando…</p>
+        </div>
+        <p class="text-xs text-slate-500 mt-2">O horário do jogo e o momento são injetados no prompt.</p>
+      </div>
+
+      <!-- Settings -->
+      <div class="bg-slate-900 rounded-lg p-4 border border-slate-800">
+        <h2 class="text-sm font-semibold text-slate-300 mb-3 uppercase tracking-wide">Configuração</h2>
+        <div class="space-y-3 text-sm">
+          <label class="flex items-center gap-2">
+            <input type="checkbox" id="order-original" checked class="accent-sky-500" />
+            <span>Ordem original</span>
+          </label>
+          <label class="flex items-center gap-2">
+            <input type="checkbox" id="order-reversed" checked class="accent-sky-500" />
+            <span>Ordem invertida</span>
+          </label>
+          <div class="flex items-center gap-2 pt-1">
+            <label class="text-slate-400 whitespace-nowrap">Repetições:</label>
+            <input type="number" id="reps" value="1" min="1" max="10"
+              class="w-16 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-white text-center" />
+          </div>
+          <label class="flex items-center gap-2 pt-1">
+            <input type="checkbox" id="overwrite" class="accent-sky-500" />
+            <span class="text-slate-400">Reescrever existentes</span>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- Center/Right column: matches + log -->
+    <div class="lg:col-span-2 space-y-4">
+
+      <!-- Match selector -->
+      <div class="bg-slate-900 rounded-lg p-4 border border-slate-800">
+        <div class="flex items-center justify-between mb-2">
+          <h2 class="text-sm font-semibold text-slate-300 uppercase tracking-wide">Partidas</h2>
+          <div class="flex gap-2">
+            <button class="text-xs text-sky-400 hover:text-sky-300" onclick="selectAllMatches(true)">Todas</button>
+            <span class="text-slate-600">|</span>
+            <button class="text-xs text-sky-400 hover:text-sky-300" onclick="selectAllMatches(false)">Nenhuma</button>
+          </div>
+        </div>
+        <select id="match-select" multiple
+          class="w-full bg-slate-800 border border-slate-700 rounded text-sm text-slate-200 px-2 py-1">
+          <option disabled>Carregando…</option>
+        </select>
+        <p class="text-xs text-slate-500 mt-1">Ctrl+clique para selecionar múltiplas. Sem seleção = todas.</p>
+      </div>
+
+      <!-- Run button + info -->
+      <div class="flex items-center gap-3">
+        <button id="run-btn" onclick="startRun()"
+          class="bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white font-semibold px-6 py-2 rounded-lg transition text-sm">
+          ▶ Rodar
+        </button>
+        <div id="run-status" class="text-sm text-slate-400"></div>
+      </div>
+
+      <!-- Log terminal -->
+      <div class="bg-slate-950 rounded-lg border border-slate-800 overflow-hidden">
+        <div class="flex items-center justify-between px-3 py-1.5 bg-slate-900 border-b border-slate-800">
+          <span class="text-xs text-slate-400 font-mono">log</span>
+          <button onclick="clearLog()" class="text-xs text-slate-500 hover:text-slate-300">limpar</button>
+        </div>
+        <div id="log-output"
+          class="h-72 overflow-y-auto p-3 space-y-0.5 text-slate-300 leading-relaxed">
+          <p class="text-slate-600">Aguardando execução…</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════ TAB: RESULTADOS ═══════════════════════ -->
+<div id="tab-results" class="tab-pane hidden p-6 max-w-7xl mx-auto">
+
+  <!-- Filters -->
+  <div class="bg-slate-900 rounded-lg p-4 border border-slate-800 mb-4 flex flex-wrap gap-3 items-end">
+    <div>
+      <label class="block text-xs text-slate-400 mb-1">Modelo</label>
+      <select id="f-model" onchange="loadResults()" class="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sm text-slate-200">
+        <option value="">Todos</option>
+      </select>
+    </div>
+    <div>
+      <label class="block text-xs text-slate-400 mb-1">Status</label>
+      <select id="f-status" onchange="loadResults()" class="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sm text-slate-200">
+        <option value="">Todos</option>
+        <option>success</option>
+        <option>error</option>
+        <option>manual</option>
+      </select>
+    </div>
+    <div>
+      <label class="block text-xs text-slate-400 mb-1">Prompt</label>
+      <select id="f-prompt" onchange="loadResults()" class="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sm text-slate-200">
+        <option value="">Todos</option>
+      </select>
+    </div>
+    <div>
+      <label class="block text-xs text-slate-400 mb-1">Momento</label>
+      <select id="f-moment" onchange="loadResults()" class="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sm text-slate-200">
+        <option value="">Todos</option>
+      </select>
+    </div>
+    <div>
+      <label class="block text-xs text-slate-400 mb-1">Match ID</label>
+      <input id="f-match" oninput="debounceLoad()" placeholder="ex: 1"
+        class="w-20 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sm text-slate-200" />
+    </div>
+    <button onclick="loadResults()" class="bg-slate-700 hover:bg-slate-600 text-sm px-3 py-1 rounded transition">Filtrar</button>
+    <span id="res-count" class="text-xs text-slate-500 ml-auto self-center"></span>
+  </div>
+
+  <!-- Table -->
+  <div class="overflow-x-auto rounded-lg border border-slate-800">
+    <table class="w-full text-xs">
+      <thead class="bg-slate-800 text-slate-400 uppercase tracking-wide">
+        <tr>
+          <th class="px-3 py-2 text-left">Partida</th>
+          <th class="px-3 py-2 text-left">Modelo</th>
+          <th class="px-3 py-2 text-left">Prompt</th>
+          <th class="px-3 py-2 text-center">Ordem</th>
+          <th class="px-3 py-2 text-center">Momento</th>
+          <th class="px-3 py-2 text-center">Rep</th>
+          <th class="px-3 py-2 text-center">Placar</th>
+          <th class="px-3 py-2 text-center">Probs</th>
+          <th class="px-3 py-2 text-center">Status</th>
+          <th class="px-3 py-2 text-center">ms</th>
+          <th class="px-3 py-2 text-center">Tokens</th>
+          <th class="px-3 py-2 text-center">Detalhe</th>
+        </tr>
+      </thead>
+      <tbody id="results-body" class="divide-y divide-slate-800 text-slate-300">
+        <tr><td colspan="12" class="px-3 py-6 text-center text-slate-500">Carregando…</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Pagination -->
+  <div class="flex gap-2 mt-3 items-center">
+    <button id="prev-btn" onclick="changePage(-1)" class="bg-slate-800 hover:bg-slate-700 px-3 py-1 rounded text-sm disabled:opacity-40" disabled>← Anterior</button>
+    <span id="page-info" class="text-xs text-slate-500"></span>
+    <button id="next-btn" onclick="changePage(1)" class="bg-slate-800 hover:bg-slate-700 px-3 py-1 rounded text-sm disabled:opacity-40" disabled>Próximo →</button>
+  </div>
+
+  <!-- Detail modal -->
+  <div id="detail-modal" class="hidden fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" onclick="closeDetail(event)">
+    <div class="bg-slate-900 border border-slate-700 rounded-xl max-w-2xl w-full max-h-[80vh] overflow-y-auto p-6" onclick="event.stopPropagation()">
+      <div class="flex justify-between items-center mb-4">
+        <h3 class="font-semibold text-white">Detalhe do Run</h3>
+        <button onclick="closeDetail()" class="text-slate-400 hover:text-white text-xl leading-none">&times;</button>
+      </div>
+      <pre id="detail-content" class="text-xs text-slate-300 whitespace-pre-wrap break-words font-mono"></pre>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════ TAB: MANUAL ═══════════════════════ -->
+<div id="tab-manual" class="tab-pane hidden p-6 max-w-2xl mx-auto">
+  <div class="bg-slate-900 rounded-lg p-6 border border-slate-800 space-y-4">
+    <h2 class="text-sm font-semibold text-slate-300 uppercase tracking-wide mb-2">Salvar Chamada Manual</h2>
+
+    <div class="grid grid-cols-2 gap-4">
+      <div>
+        <label class="block text-xs text-slate-400 mb-1">Partida</label>
+        <select id="m-match" class="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-200">
+          <option disabled selected>Selecione…</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs text-slate-400 mb-1">Modelo</label>
+        <select id="m-model" class="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-200">
+          <option disabled selected>Selecione…</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs text-slate-400 mb-1">Prompt</label>
+        <select id="m-prompt" class="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-200">
+          <option disabled selected>Selecione…</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs text-slate-400 mb-1">Ordem dos times</label>
+        <select id="m-order" class="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-200">
+          <option value="original">original</option>
+          <option value="reversed">reversed</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs text-slate-400 mb-1">Momento do jogo</label>
+        <select id="m-moment" class="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-200"></select>
+      </div>
+      <div>
+        <label class="block text-xs text-slate-400 mb-1">Repetição nº</label>
+        <input type="number" id="m-rep" value="1" min="1" max="99"
+          class="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-200" />
+      </div>
+      <div>
+        <label class="block text-xs text-slate-400 mb-1">Notas (opcional)</label>
+        <input type="text" id="m-notes" placeholder="ex: rodado via playground"
+          class="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-200" />
+      </div>
+    </div>
+
+    <div>
+      <label class="block text-xs text-slate-400 mb-1">Resposta bruta do modelo (JSON ou texto)</label>
+      <textarea id="m-response" rows="10" placeholder='{"score_team_1": 2, "score_team_2": 1, ...}'
+        class="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-xs font-mono text-slate-200 resize-y"></textarea>
+    </div>
+
+    <div class="flex items-center gap-3">
+      <button onclick="saveManual()"
+        class="bg-violet-600 hover:bg-violet-500 text-white font-semibold px-5 py-2 rounded-lg transition text-sm">
+        Salvar
+      </button>
+      <div id="m-status" class="text-sm"></div>
+    </div>
+
+    <!-- Parse preview -->
+    <div id="m-preview" class="hidden bg-slate-950 rounded-lg p-4 border border-slate-800 text-xs">
+      <p class="text-slate-400 mb-2 font-semibold">Preview do parse:</p>
+      <pre id="m-preview-content" class="text-slate-300 font-mono whitespace-pre-wrap"></pre>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────
+let allModels = [], allMatches = [], allPrompts = [], allMoments = [];
+let currentPage = 0, pageSize = 50, totalRows = 0;
+let activeSource = null;
+let debounceTimer = null;
+
+const MOMENT_LABELS = {
+  pre_match: 'Antes do jogo',
+  halftime: 'Intervalo',
+  post_match: 'Final',
+};
+const momentLabel = (m) => MOMENT_LABELS[m] || m || '—';
+
+// ── Init ───────────────────────────────────────────────────────────────────
+async function init() {
+  await Promise.all([loadModels(), loadMatches(), loadPrompts(), loadMoments()]);
+  loadStats();
+}
+
+async function loadMoments() {
+  const res = await fetch('/api/moments');
+  allMoments = await res.json();
+
+  // Run tab — all checked by default (pré, intervalo, final)
+  const el = document.getElementById('moment-list');
+  el.innerHTML = allMoments.map(m => `
+    <label class="flex items-center gap-2 cursor-pointer">
+      <input type="checkbox" class="moment-cb accent-sky-500" value="${m}" ${m === 'pre_match' ? 'checked' : ''} />
+      <span class="text-slate-200">${momentLabel(m)}</span>
+      <span class="text-slate-500 text-xs">${m}</span>
+    </label>`).join('');
+
+  // Results filter
+  const fm = document.getElementById('f-moment');
+  allMoments.forEach(m => {
+    const o = document.createElement('option'); o.value = m; o.textContent = momentLabel(m); fm.appendChild(o);
+  });
+
+  // Manual tab
+  const mm = document.getElementById('m-moment');
+  mm.innerHTML = allMoments.map(m => `<option value="${m}">${momentLabel(m)}</option>`).join('');
+}
+
+async function loadModels() {
+  const res = await fetch('/api/models');
+  allModels = await res.json();
+
+  // Run tab
+  const el = document.getElementById('model-list');
+  el.innerHTML = allModels.map(m => `
+    <label class="flex items-center gap-2 cursor-pointer">
+      <input type="checkbox" class="model-cb accent-sky-500" value="${m.key}" ${m.enabled ? 'checked' : ''} />
+      <span class="text-slate-200">${m.key}</span>
+      <span class="text-slate-500 text-xs">${m.provider}</span>
+    </label>`).join('');
+
+  // Filter dropdown
+  const fd = document.getElementById('f-model');
+  allModels.forEach(m => {
+    const o = document.createElement('option'); o.value = m.key; o.textContent = m.key;
+    fd.appendChild(o);
+  });
+
+  // Manual tab
+  const mm = document.getElementById('m-model');
+  allModels.forEach(m => {
+    const o = document.createElement('option'); o.value = m.key; o.textContent = `${m.key} (${m.provider})`;
+    mm.appendChild(o);
+  });
+}
+
+async function loadMatches() {
+  const res = await fetch('/api/matches');
+  allMatches = await res.json();
+
+  const sel = document.getElementById('match-select');
+  sel.innerHTML = allMatches.map(m =>
+    `<option value="${m.match_id}">${m.match_id}. ${m.team_1} vs ${m.team_2} — ${m.phase}</option>`
+  ).join('');
+
+  const mm = document.getElementById('m-match');
+  mm.innerHTML = '<option disabled selected>Selecione…</option>' +
+    allMatches.map(m => `<option value="${m.match_id}">${m.match_id}. ${m.team_1} vs ${m.team_2}</option>`).join('');
+}
+
+async function loadPrompts() {
+  const res = await fetch('/api/prompts');
+  allPrompts = await res.json();
+
+  const el = document.getElementById('prompt-list');
+  el.innerHTML = allPrompts.map(p => `
+    <label class="flex items-center gap-2 cursor-pointer">
+      <input type="checkbox" class="prompt-cb accent-sky-500" value="${p}" checked />
+      <span class="text-slate-200 text-xs">${p}</span>
+    </label>`).join('');
+
+  const fp = document.getElementById('f-prompt');
+  allPrompts.forEach(p => {
+    const o = document.createElement('option'); o.value = p; o.textContent = p; fp.appendChild(o);
+  });
+
+  const mp = document.getElementById('m-prompt');
+  mp.innerHTML = '<option disabled selected>Selecione…</option>' +
+    allPrompts.map(p => `<option value="${p}">${p}</option>`).join('');
+}
+
+async function loadStats() {
+  try {
+    const res = await fetch('/api/stats');
+    const s = await res.json();
+    document.getElementById('s-total').textContent = s.total;
+    document.getElementById('s-ok').textContent = s.success;
+    document.getElementById('s-err').textContent = s.errors;
+  } catch {}
+}
+
+// ── Tabs ───────────────────────────────────────────────────────────────────
+function showTab(name) {
+  document.querySelectorAll('.tab-pane').forEach(el => el.classList.add('hidden'));
+  document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.remove('hidden');
+  document.querySelectorAll('.tab-btn').forEach(el => {
+    if (el.getAttribute('onclick') === `showTab('${name}')`) el.classList.add('active');
+  });
+  if (name === 'results') { currentPage = 0; loadResults(); }
+}
+
+// ── Run tab ────────────────────────────────────────────────────────────────
+function selectAllModels(val) {
+  document.querySelectorAll('.model-cb').forEach(cb => cb.checked = val);
+}
+function selectAllMatches(val) {
+  const sel = document.getElementById('match-select');
+  for (const o of sel.options) o.selected = val;
+}
+
+function appendLog(msg, cls = '') {
+  const el = document.getElementById('log-output');
+  const line = document.createElement('p');
+  line.className = cls || 'text-slate-300';
+  line.textContent = msg;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+}
+
+function clearLog() {
+  document.getElementById('log-output').innerHTML = '';
+}
+
+async function startRun() {
+  const modelKeys = [...document.querySelectorAll('.model-cb:checked')].map(cb => cb.value);
+  if (!modelKeys.length) { alert('Selecione pelo menos um modelo.'); return; }
+
+  const promptIds = [...document.querySelectorAll('.prompt-cb:checked')].map(cb => cb.value);
+  if (!promptIds.length) { alert('Selecione pelo menos um prompt.'); return; }
+
+  const orders = [];
+  if (document.getElementById('order-original').checked) orders.push('original');
+  if (document.getElementById('order-reversed').checked) orders.push('reversed');
+  if (!orders.length) { alert('Selecione pelo menos uma ordem.'); return; }
+
+  const moments = [...document.querySelectorAll('.moment-cb:checked')].map(cb => cb.value);
+  if (!moments.length) { alert('Selecione pelo menos um momento.'); return; }
+
+  const sel = document.getElementById('match-select');
+  const matchIds = [...sel.selectedOptions].map(o => o.value);
+
+  const body = {
+    model_keys: modelKeys,
+    match_ids: matchIds.length ? matchIds : null,
+    prompt_ids: promptIds,
+    team_order_types: orders,
+    match_moments: moments,
+    runs_per_combination: parseInt(document.getElementById('reps').value) || 1,
+    overwrite: document.getElementById('overwrite').checked,
+  };
+
+  if (activeSource) { activeSource.close(); activeSource = null; }
+  clearLog();
+  document.getElementById('run-btn').disabled = true;
+  document.getElementById('run-btn').textContent = '⏳ Rodando…';
+  document.getElementById('run-status').textContent = '';
+
+  const startRes = await fetch('/api/runs/start', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  });
+  const { task_id } = await startRes.json();
+
+  const src = new EventSource(`/api/stream/${task_id}`);
+  activeSource = src;
+
+  src.onmessage = (e) => {
+    const data = JSON.parse(e.data);
+    if (data.type === 'log') {
+      appendLog(data.message);
+    } else if (data.type === 'done') {
+      const s = data.stats;
+      appendLog(`✓ Concluído — total: ${s.total}, ok: ${s.success}, erros: ${s.error}, pulados: ${s.skipped}`, 'text-green-400 font-semibold');
+      finishRun();
+    } else if (data.type === 'error') {
+      appendLog('ERRO:\n' + data.message, 'text-red-400');
+      finishRun();
+    }
+  };
+
+  src.onerror = () => { appendLog('Conexão encerrada.', 'text-slate-500'); finishRun(); };
+}
+
+function finishRun() {
+  if (activeSource) { activeSource.close(); activeSource = null; }
+  document.getElementById('run-btn').disabled = false;
+  document.getElementById('run-btn').textContent = '▶ Rodar';
+  loadStats();
+}
+
+// ── Results tab ────────────────────────────────────────────────────────────
+let _debounce = null;
+function debounceLoad() {
+  clearTimeout(_debounce);
+  _debounce = setTimeout(() => { currentPage = 0; loadResults(); }, 400);
+}
+
+async function loadResults() {
+  const model   = document.getElementById('f-model').value;
+  const status  = document.getElementById('f-status').value;
+  const prompt  = document.getElementById('f-prompt').value;
+  const moment  = document.getElementById('f-moment').value;
+  const matchId = document.getElementById('f-match').value.trim();
+
+  const params = new URLSearchParams({ limit: pageSize, offset: currentPage * pageSize });
+  if (model)   params.set('model', model);
+  if (status)  params.set('status', status);
+  if (prompt)  params.set('prompt_id', prompt);
+  if (moment)  params.set('moment', moment);
+  if (matchId) params.set('match_id', matchId);
+
+  const res = await fetch('/api/runs?' + params);
+  const { total, rows } = await res.json();
+  totalRows = total;
+
+  const body = document.getElementById('results-body');
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="12" class="px-3 py-6 text-center text-slate-500">Sem resultados</td></tr>';
+    updatePagination();
+    return;
+  }
+
+  body.innerHTML = rows.map(r => {
+    const st = r.execution_status || '';
+    const stCls = st === 'success' ? 'status-success' : st === 'error' ? 'status-error' : st === 'manual' ? 'status-manual' : 'status-skipped';
+    const score = (r.parsed_score_team_1 != null && r.parsed_score_team_2 != null)
+      ? `${r.parsed_score_team_1}–${r.parsed_score_team_2}` : '—';
+    const probs = (r.parsed_team1_win_probability != null)
+      ? `${r.parsed_team1_win_probability}/${r.parsed_draw_probability}/${r.parsed_team2_win_probability}` : '—';
+    const ms = r.latency_ms != null ? Math.round(r.latency_ms) : '—';
+    const tok = r.total_tokens || '—';
+    return `<tr>
+      <td class="px-3 py-2 whitespace-nowrap">${r.team_1} vs ${r.team_2}</td>
+      <td class="px-3 py-2 font-mono">${r.model || '—'}</td>
+      <td class="px-3 py-2 text-slate-400 max-w-[120px] truncate" title="${r.prompt_id}">${r.prompt_id || '—'}</td>
+      <td class="px-3 py-2 text-center text-slate-500">${r.team_order_type?.[0] || '—'}</td>
+      <td class="px-3 py-2 text-center text-slate-400 text-xs whitespace-nowrap">${momentLabel(r.match_moment)}</td>
+      <td class="px-3 py-2 text-center">${r.repetition_number || '—'}</td>
+      <td class="px-3 py-2 text-center font-mono">${score}</td>
+      <td class="px-3 py-2 text-center text-slate-400 font-mono text-xs">${probs}</td>
+      <td class="px-3 py-2 text-center ${stCls} font-medium">${st}</td>
+      <td class="px-3 py-2 text-center text-slate-500">${ms}</td>
+      <td class="px-3 py-2 text-center text-slate-500">${tok}</td>
+      <td class="px-3 py-2 text-center">
+        <button onclick="showDetail('${r.run_id}')" class="text-sky-500 hover:text-sky-300 text-xs">ver</button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('res-count').textContent = `${totalRows} resultados`;
+  updatePagination();
+}
+
+function updatePagination() {
+  const pages = Math.ceil(totalRows / pageSize);
+  document.getElementById('page-info').textContent =
+    totalRows ? `Página ${currentPage + 1} de ${pages}` : '';
+  document.getElementById('prev-btn').disabled = currentPage === 0;
+  document.getElementById('next-btn').disabled = currentPage >= pages - 1;
+}
+
+function changePage(dir) {
+  currentPage += dir;
+  loadResults();
+}
+
+async function showDetail(runId) {
+  const res = await fetch(`/api/runs/${encodeURIComponent(runId)}`);
+  const data = await res.json();
+  const modal = document.getElementById('detail-modal');
+  document.getElementById('detail-content').textContent = JSON.stringify(data, null, 2);
+  modal.classList.remove('hidden');
+}
+
+function closeDetail(e) {
+  if (!e || e.target === document.getElementById('detail-modal')) {
+    document.getElementById('detail-modal').classList.add('hidden');
+  }
+}
+
+// ── Manual tab ─────────────────────────────────────────────────────────────
+async function saveManual() {
+  const matchId = document.getElementById('m-match').value;
+  const modelKey = document.getElementById('m-model').value;
+  const promptId = document.getElementById('m-prompt').value;
+  if (!matchId || !modelKey || !promptId) { alert('Preencha partida, modelo e prompt.'); return; }
+
+  const raw = document.getElementById('m-response').value.trim();
+  if (!raw) { alert('Cole a resposta do modelo.'); return; }
+
+  const body = {
+    match_id: matchId,
+    model_key: modelKey,
+    prompt_id: promptId,
+    team_order_type: document.getElementById('m-order').value,
+    match_moment: document.getElementById('m-moment').value,
+    repetition_number: parseInt(document.getElementById('m-rep').value) || 1,
+    raw_response: raw,
+    notes: document.getElementById('m-notes').value.trim() || null,
+  };
+
+  const statusEl = document.getElementById('m-status');
+  statusEl.textContent = 'Salvando…';
+  statusEl.className = 'text-sm text-slate-400';
+
+  try {
+    const res = await fetch('/api/manual', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      statusEl.textContent = 'Erro: ' + (data.detail || res.statusText);
+      statusEl.className = 'text-sm text-red-400';
+      return;
+    }
+
+    statusEl.textContent = `Salvo! (${data.json_valid ? 'JSON válido' : 'JSON inválido'})`;
+    statusEl.className = 'text-sm ' + (data.json_valid ? 'text-green-400' : 'text-yellow-400');
+
+    const preview = document.getElementById('m-preview');
+    document.getElementById('m-preview-content').textContent = JSON.stringify(data, null, 2);
+    preview.classList.remove('hidden');
+    loadStats();
+  } catch (e) {
+    statusEl.textContent = 'Erro de rede.';
+    statusEl.className = 'text-sm text-red-400';
+  }
+}
+
+// ── Keyboard shortcut ──────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeDetail();
+});
+
+init();
+</script>
+</body>
+</html>

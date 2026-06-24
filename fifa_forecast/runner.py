@@ -35,7 +35,12 @@ def _safe(token: str) -> str:
 
 
 def make_run_id(
-    match_id: str, model_key: str, prompt_id: str, order: str, repetition: int
+    match_id: str,
+    model_key: str,
+    prompt_id: str,
+    order: str,
+    repetition: int,
+    moment: str = "pre_match",
 ) -> str:
     return "__".join(
         [
@@ -43,6 +48,7 @@ def make_run_id(
             _safe(model_key),
             _safe(prompt_id),
             _safe(order),
+            _safe(moment),
             f"rep{repetition:02d}",
         ]
     )
@@ -98,6 +104,7 @@ class ExperimentRunner:
         return (
             len(matches)
             * len(self.config.team_order_types)
+            * len(self.config.match_moments)
             * len(self.config.enabled_models())
             * len(self.config.prompt_ids)
             * self.config.runs_per_combination
@@ -128,44 +135,52 @@ class ExperimentRunner:
         self.progress(
             f"Planned executions: {total_planned} "
             f"({len(matches)} matches x {len(self.config.team_order_types)} orders "
+            f"x {len(self.config.match_moments)} moments "
             f"x {len(models)} models x {len(self.config.prompt_ids)} prompts "
             f"x {self.config.runs_per_combination} reps)"
         )
 
         done = 0
         for match in matches:
-            for order in self.config.team_order_types:
-                for model_config in models:
-                    for prompt_id in self.config.prompt_ids:
-                        for rep in range(1, self.config.runs_per_combination + 1):
-                            done += 1
-                            self._execute_one(match, order, model_config, prompt_id, rep)
-                            if done % 25 == 0 or done == total_planned:
-                                self.progress(
-                                    f"  progress {done}/{total_planned} "
-                                    f"(ok={self.stats['success']}, "
-                                    f"err={self.stats['error']}, "
-                                    f"skip={self.stats['skipped']})"
+            for moment in self.config.match_moments:
+                for order in self.config.team_order_types:
+                    for model_config in models:
+                        for prompt_id in self.config.prompt_ids:
+                            for rep in range(1, self.config.runs_per_combination + 1):
+                                done += 1
+                                detail = self._execute_one(
+                                    match, order, moment, model_config, prompt_id, rep
                                 )
+                                self.progress(f"[{done}/{total_planned}] {detail}")
+        self.progress(
+            f"Summary: ok={self.stats['success']}, err={self.stats['error']}, "
+            f"skip={self.stats['skipped']}"
+        )
         return dict(self.stats)
 
     def _execute_one(
         self,
         match: Match,
         order: str,
+        moment: str,
         model_config: dict[str, Any],
         prompt_id: str,
         rep: int,
-    ) -> None:
+    ) -> str:
         self.stats["total"] += 1
-        run_id = make_run_id(match.match_id, model_config["key"], prompt_id, order, rep)
+        run_id = make_run_id(
+            match.match_id, model_config["key"], prompt_id, order, rep, moment
+        )
 
         if not self.overwrite and self.db.count("run_id = ?", (run_id,)) > 0:
             self.stats["skipped"] += 1
-            return
+            return f"skip  {run_id}"
 
         first, second = ordered_pair(match, order)
-        prompt_text = prompt_lib.render(prompt_id, first, second)
+        kickoff = match.kickoff_local or match.kickoff_datetime
+        prompt_text = prompt_lib.render(
+            prompt_id, first, second, kickoff=kickoff, moment=moment
+        )
         system_prompt = prompt_lib.SYSTEM_PROMPT
         params = dict(model_config.get("params") or {})
         provider_name = model_config.get("provider")
@@ -178,6 +193,7 @@ class ExperimentRunner:
             team_2=match.team_2,
             kickoff_datetime=match.kickoff_datetime,
             team_order_type=order,
+            match_moment=moment,
             prompt_team_1=first,
             prompt_team_2=second,
             provider=provider_name,
@@ -223,7 +239,7 @@ class ExperimentRunner:
             self.archive.write_metadata(run_id, self._metadata(record))
             self.db.insert_run(record)
             self.stats["error"] += 1
-            return
+            return f"ERR   {run_id} :: {(error_message or '')[:120]}"
 
         # Success path -----------------------------------------------------
         record.execution_status = "success"
@@ -266,6 +282,13 @@ class ExperimentRunner:
         self.archive.write_metadata(run_id, self._metadata(record))
         self.db.insert_run(record)
         self.stats["success"] += 1
+
+        if record.parsed_score_team_1 is not None and record.parsed_score_team_2 is not None:
+            score = f"{record.parsed_score_team_1}-{record.parsed_score_team_2}"
+        else:
+            score = "no-score"
+        valid = "ok" if record.json_valid else "invalid-json"
+        return f"OK    {run_id} :: {score} ({valid}, {record.latency_ms:.0f}ms)"
 
     def _call_with_retries(
         self,
