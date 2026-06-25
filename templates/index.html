@@ -868,8 +868,10 @@ async function loadPlanned() {
     const eff = r.effective_status || (r.done ? 'done' : 'scheduled');
     const meta = PLANNED_STATUS[eff] || { label: eff, cls: 'text-slate-400' };
     const st = `<span class="font-medium ${meta.cls}" title="${esc(r.error_message || '')}">${meta.label}</span>`;
-    const score = (r.parsed_score_team_1 != null && r.parsed_score_team_2 != null)
-      ? `${r.parsed_score_team_1}–${r.parsed_score_team_2}` : '—';
+    const pRev = r.team_order_type === 'reversed';
+    const ps1 = pRev ? r.parsed_score_team_2 : r.parsed_score_team_1;
+    const ps2 = pRev ? r.parsed_score_team_1 : r.parsed_score_team_2;
+    const score = (ps1 != null && ps2 != null) ? `${ps1}–${ps2}` : '—';
     const cancellable = (eff === 'scheduled' || eff === 'overdue');
     const action = cancellable
       ? `<button onclick="cancelOne('${r.run_id}')" class="text-amber-400 hover:text-amber-300">cancelar</button>`
@@ -1115,20 +1117,24 @@ async function loadResults() {
   body.innerHTML = rows.map(r => {
     const st = r.execution_status || '';
     const stCls = st === 'success' ? 'status-success' : st === 'error' ? 'status-error' : st === 'manual' ? 'status-manual' : 'status-skipped';
-    const score = (r.parsed_score_team_1 != null && r.parsed_score_team_2 != null)
-      ? `${r.parsed_score_team_1}–${r.parsed_score_team_2}` : '—';
-    const probs = (r.parsed_team1_win_probability != null)
-      ? `${r.parsed_team1_win_probability}/${r.parsed_draw_probability}/${r.parsed_team2_win_probability}` : '—';
+    const s1 = r.canon_score_team_1 != null ? r.canon_score_team_1 : r.parsed_score_team_1;
+    const s2 = r.canon_score_team_2 != null ? r.canon_score_team_2 : r.parsed_score_team_2;
+    const score = (s1 != null && s2 != null) ? `${s1}–${s2}` : '—';
+    const cp1 = r.canon_team1_win_probability != null ? r.canon_team1_win_probability : r.parsed_team1_win_probability;
+    const cp2 = r.canon_team2_win_probability != null ? r.canon_team2_win_probability : r.parsed_team2_win_probability;
+    const probs = (cp1 != null)
+      ? `${cp1}/${r.parsed_draw_probability}/${cp2}` : '—';
+    const isRev = r.team_order_type === 'reversed';
     const ms = r.latency_ms != null ? Math.round(r.latency_ms) : '—';
     const tok = r.total_tokens || '—';
     return `<tr>
       <td class="px-3 py-2 whitespace-nowrap">${r.team_1} vs ${r.team_2}</td>
       <td class="px-3 py-2 font-mono">${r.model || '—'}</td>
       <td class="px-3 py-2 text-slate-400 max-w-[120px] truncate" title="${r.prompt_id}">${r.prompt_id || '—'}</td>
-      <td class="px-3 py-2 text-center text-slate-500">${r.team_order_type?.[0] || '—'}</td>
+      <td class="px-3 py-2 text-center ${isRev ? 'text-amber-400' : 'text-slate-500'}" title="${isRev ? 'Ordem invertida: o modelo viu ' + r.team_2 + ' vs ' + r.team_1 + '. Placar/probabilidades exibidos já normalizados para ' + r.team_1 + ' vs ' + r.team_2 + '.' : 'Ordem original'}">${r.team_order_type?.[0] || '—'}</td>
       <td class="px-3 py-2 text-center text-slate-400 text-xs whitespace-nowrap">${momentLabel(r.match_moment)}</td>
       <td class="px-3 py-2 text-center">${r.repetition_number || '—'}</td>
-      <td class="px-3 py-2 text-center font-mono">${score}</td>
+      <td class="px-3 py-2 text-center font-mono" title="${isRev ? 'Normalizado para ' + r.team_1 + ' vs ' + r.team_2 : ''}">${score}</td>
       <td class="px-3 py-2 text-center text-slate-400 font-mono text-xs">${probs}</td>
       <td class="px-3 py-2 text-center ${stCls} font-medium">${st}</td>
       <td class="px-3 py-2 text-center text-slate-500">${ms}</td>
@@ -1174,10 +1180,17 @@ async function showDetail(runId) {
   const data = await res.json();
   const el = document.getElementById('detail-content');
 
-  const score = (data.parsed_score_team_1 != null && data.parsed_score_team_2 != null)
-    ? `${data.parsed_score_team_1}–${data.parsed_score_team_2}` : '—';
+  const rev = data.team_order_type === 'reversed';
+  const ds1 = rev ? data.parsed_score_team_2 : data.parsed_score_team_1;
+  const ds2 = rev ? data.parsed_score_team_1 : data.parsed_score_team_2;
+  const score = (ds1 != null && ds2 != null) ? `${ds1}–${ds2}` : '—';
+  const dp1 = rev ? data.parsed_team2_win_probability : data.parsed_team1_win_probability;
+  const dp2 = rev ? data.parsed_team1_win_probability : data.parsed_team2_win_probability;
   const probs = (data.parsed_team1_win_probability != null)
-    ? `${data.parsed_team1_win_probability}% / ${data.parsed_draw_probability}% / ${data.parsed_team2_win_probability}%` : '—';
+    ? `${dp1}% / ${data.parsed_draw_probability}% / ${dp2}%` : '—';
+  const orderTxt = rev
+    ? `reversed <span class="text-amber-400">(modelo viu ${esc(data.team_2)} vs ${esc(data.team_1)} — valores abaixo normalizados)</span>`
+    : 'original';
 
   const meta = `
     <div class="grid grid-cols-2 gap-x-6 gap-y-1 mb-4 text-xs">
@@ -1185,7 +1198,7 @@ async function showDetail(runId) {
       <div><span class="text-slate-500">Modelo:</span> <span class="font-mono text-slate-200">${esc(data.model)}</span></div>
       <div><span class="text-slate-500">Prompt:</span> <span class="text-slate-200">${esc(data.prompt_id)}</span></div>
       <div><span class="text-slate-500">Momento:</span> <span class="text-slate-200">${momentLabel(data.match_moment)}</span></div>
-      <div><span class="text-slate-500">Ordem:</span> <span class="text-slate-200">${esc(data.team_order_type)}</span></div>
+      <div><span class="text-slate-500">Ordem:</span> <span class="text-slate-200">${orderTxt}</span></div>
       <div><span class="text-slate-500">Status:</span> <span class="text-slate-200">${esc(data.execution_status)}</span></div>
       <div><span class="text-slate-500">Placar previsto:</span> <span class="font-mono text-white">${score}</span></div>
       <div><span class="text-slate-500">Probs (1/X/2):</span> <span class="font-mono text-slate-200">${probs}</span></div>

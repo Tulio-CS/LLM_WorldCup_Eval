@@ -134,7 +134,7 @@ def list_runs(
         total = conn.execute(
             f"SELECT COUNT(*) FROM forecast_runs {wc}", params
         ).fetchone()[0]
-        return {"total": total, "rows": [dict(r) for r in rows]}
+        return {"total": total, "rows": [_canonicalize_run(dict(r)) for r in rows]}
     finally:
         conn.close()
 
@@ -164,6 +164,39 @@ def get_stats():
         }
     finally:
         conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# Canonical (match-order) orientation.
+#
+# The stored ``parsed_*`` scores/probabilities are in the order the teams were
+# *presented* to the model. For ``team_order_type='reversed'`` runs that order is
+# swapped relative to the canonical ``team_1`` vs ``team_2`` of the fixture, so a
+# reversed "1-2" actually means "2-1" for the match as listed. These SQL snippets
+# undo the swap so every aggregation/comparison is in canonical team order.
+# (Total goals, draw probability and max-confidence are order-independent.)
+# --------------------------------------------------------------------------- #
+_C1 = ("CASE WHEN team_order_type='reversed' "
+       "THEN parsed_score_team_2 ELSE parsed_score_team_1 END")
+_C2 = ("CASE WHEN team_order_type='reversed' "
+       "THEN parsed_score_team_1 ELSE parsed_score_team_2 END")
+_P1 = ("CASE WHEN team_order_type='reversed' "
+       "THEN parsed_team2_win_probability ELSE parsed_team1_win_probability END")
+_P2 = ("CASE WHEN team_order_type='reversed' "
+       "THEN parsed_team1_win_probability ELSE parsed_team2_win_probability END")
+
+
+def _canonicalize_run(d: dict) -> dict:
+    """Add canonical-order score/probability fields to a run row dict."""
+    reversed_ = d.get("team_order_type") == "reversed"
+    s1, s2 = d.get("parsed_score_team_1"), d.get("parsed_score_team_2")
+    p1, p2 = d.get("parsed_team1_win_probability"), d.get("parsed_team2_win_probability")
+    d["canon_score_team_1"] = s2 if reversed_ else s1
+    d["canon_score_team_2"] = s1 if reversed_ else s2
+    d["canon_team1_win_probability"] = p2 if reversed_ else p1
+    d["canon_team2_win_probability"] = p1 if reversed_ else p2
+    d["canon_draw_probability"] = d.get("parsed_draw_probability")
+    return d
 
 
 @app.get("/api/dashboard")
@@ -218,36 +251,36 @@ def get_dashboard():
                FROM forecast_runs GROUP BY match_moment ORDER BY total DESC"""
         ).fetchall()]
 
-        # Prediction behaviour (only rows with a parsed scoreline)
+        # Prediction behaviour (only rows with a parsed scoreline) — canonical order
         pred = conn.execute(
-            """SELECT
+            f"""SELECT
                   COUNT(*) AS n,
-                  AVG(parsed_score_team_1) AS avg_t1,
-                  AVG(parsed_score_team_2) AS avg_t2,
+                  AVG({_C1}) AS avg_t1,
+                  AVG({_C2}) AS avg_t2,
                   AVG(parsed_score_team_1 + parsed_score_team_2) AS avg_goals,
-                  SUM(CASE WHEN parsed_score_team_1 > parsed_score_team_2 THEN 1 ELSE 0 END) AS t1_win,
-                  SUM(CASE WHEN parsed_score_team_1 = parsed_score_team_2 THEN 1 ELSE 0 END) AS draw,
-                  SUM(CASE WHEN parsed_score_team_1 < parsed_score_team_2 THEN 1 ELSE 0 END) AS t2_win
+                  SUM(CASE WHEN {_C1} > {_C2} THEN 1 ELSE 0 END) AS t1_win,
+                  SUM(CASE WHEN {_C1} = {_C2} THEN 1 ELSE 0 END) AS draw,
+                  SUM(CASE WHEN {_C1} < {_C2} THEN 1 ELSE 0 END) AS t2_win
                FROM forecast_runs
                WHERE parsed_score_team_1 IS NOT NULL
                  AND parsed_score_team_2 IS NOT NULL"""
         ).fetchone()
 
-        # Most-predicted scorelines
+        # Most-predicted scorelines — canonical order
         top_scores = [dict(r) for r in conn.execute(
-            """SELECT (parsed_score_team_1 || '-' || parsed_score_team_2) AS scoreline,
+            f"""SELECT ({_C1} || '-' || {_C2}) AS scoreline,
                       COUNT(*) AS cnt
                FROM forecast_runs
                WHERE parsed_score_team_1 IS NOT NULL AND parsed_score_team_2 IS NOT NULL
                GROUP BY scoreline ORDER BY cnt DESC LIMIT 8"""
         ).fetchall()]
 
-        # Average win/draw/loss probabilities by model (probability prompts only)
+        # Average win/draw/loss probabilities by model — canonical order
         prob_by_model = [dict(r) for r in conn.execute(
-            """SELECT model,
-                      AVG(parsed_team1_win_probability) AS avg_t1,
+            f"""SELECT model,
+                      AVG({_P1}) AS avg_t1,
                       AVG(parsed_draw_probability) AS avg_draw,
-                      AVG(parsed_team2_win_probability) AS avg_t2,
+                      AVG({_P2}) AS avg_t2,
                       COUNT(*) AS n
                FROM forecast_runs
                WHERE parsed_team1_win_probability IS NOT NULL
@@ -263,26 +296,26 @@ def get_dashboard():
                GROUP BY goals ORDER BY goals"""
         ).fetchall()]
 
-        # Per-match consensus: how the models collectively lean for each match.
+        # Per-match consensus: how the models collectively lean — canonical order
         by_match = [dict(r) for r in conn.execute(
-            """SELECT match_id,
+            f"""SELECT match_id,
                       MAX(team_1) AS team_1, MAX(team_2) AS team_2,
                       MAX(phase) AS phase,
                       COUNT(*) AS n,
-                      SUM(CASE WHEN parsed_score_team_1 > parsed_score_team_2 THEN 1 ELSE 0 END) AS t1_win,
-                      SUM(CASE WHEN parsed_score_team_1 = parsed_score_team_2 THEN 1 ELSE 0 END) AS draw,
-                      SUM(CASE WHEN parsed_score_team_1 < parsed_score_team_2 THEN 1 ELSE 0 END) AS t2_win,
-                      AVG(parsed_score_team_1) AS avg_t1,
-                      AVG(parsed_score_team_2) AS avg_t2
+                      SUM(CASE WHEN {_C1} > {_C2} THEN 1 ELSE 0 END) AS t1_win,
+                      SUM(CASE WHEN {_C1} = {_C2} THEN 1 ELSE 0 END) AS draw,
+                      SUM(CASE WHEN {_C1} < {_C2} THEN 1 ELSE 0 END) AS t2_win,
+                      AVG({_C1}) AS avg_t1,
+                      AVG({_C2}) AS avg_t2
                FROM forecast_runs
                WHERE parsed_score_team_1 IS NOT NULL AND parsed_score_team_2 IS NOT NULL
                GROUP BY match_id
                ORDER BY n DESC"""
         ).fetchall()]
-        # Attach the single most-predicted scoreline per match.
+        # Attach the single most-predicted scoreline per match (canonical order).
         for m in by_match:
             top = conn.execute(
-                """SELECT (parsed_score_team_1 || '-' || parsed_score_team_2) AS scoreline,
+                f"""SELECT ({_C1} || '-' || {_C2}) AS scoreline,
                           COUNT(*) AS cnt
                    FROM forecast_runs
                    WHERE match_id = ? AND parsed_score_team_1 IS NOT NULL
