@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import queue
 import sqlite3
 import threading
@@ -180,8 +181,13 @@ def get_dashboard():
         errors = one("SELECT COUNT(*) FROM forecast_runs WHERE execution_status='error'")
         manual = one("SELECT COUNT(*) FROM forecast_runs WHERE execution_status='manual'")
         valid_json = one("SELECT COUNT(*) FROM forecast_runs WHERE json_valid=1")
+        total_tokens = one("SELECT COALESCE(SUM(total_tokens),0) FROM forecast_runs") or 0
+        total_cost = one("SELECT COALESCE(SUM(api_cost),0) FROM forecast_runs") or 0
+        avg_latency = one(
+            "SELECT AVG(latency_ms) FROM forecast_runs WHERE execution_status='success'"
+        )
 
-        # Per-model health + cost/latency
+        # Per-model health + cost/latency + confidence (avg of the top probability)
         by_model = [dict(r) for r in conn.execute(
             """SELECT model,
                       COUNT(*) AS total,
@@ -190,7 +196,10 @@ def get_dashboard():
                       SUM(CASE WHEN json_valid=1 THEN 1 ELSE 0 END) AS valid_json,
                       AVG(latency_ms) AS avg_latency,
                       AVG(total_tokens) AS avg_tokens,
-                      SUM(COALESCE(api_cost,0)) AS total_cost
+                      SUM(COALESCE(api_cost,0)) AS total_cost,
+                      AVG(MAX(parsed_team1_win_probability,
+                              parsed_draw_probability,
+                              parsed_team2_win_probability)) AS avg_confidence
                FROM forecast_runs
                GROUP BY model ORDER BY total DESC"""
         ).fetchall()]
@@ -245,10 +254,50 @@ def get_dashboard():
                GROUP BY model ORDER BY n DESC"""
         ).fetchall()]
 
+        # Distribution of predicted total goals
+        goals_hist = [dict(r) for r in conn.execute(
+            """SELECT (parsed_score_team_1 + parsed_score_team_2) AS goals,
+                      COUNT(*) AS cnt
+               FROM forecast_runs
+               WHERE parsed_score_team_1 IS NOT NULL AND parsed_score_team_2 IS NOT NULL
+               GROUP BY goals ORDER BY goals"""
+        ).fetchall()]
+
+        # Per-match consensus: how the models collectively lean for each match.
+        by_match = [dict(r) for r in conn.execute(
+            """SELECT match_id,
+                      MAX(team_1) AS team_1, MAX(team_2) AS team_2,
+                      MAX(phase) AS phase,
+                      COUNT(*) AS n,
+                      SUM(CASE WHEN parsed_score_team_1 > parsed_score_team_2 THEN 1 ELSE 0 END) AS t1_win,
+                      SUM(CASE WHEN parsed_score_team_1 = parsed_score_team_2 THEN 1 ELSE 0 END) AS draw,
+                      SUM(CASE WHEN parsed_score_team_1 < parsed_score_team_2 THEN 1 ELSE 0 END) AS t2_win,
+                      AVG(parsed_score_team_1) AS avg_t1,
+                      AVG(parsed_score_team_2) AS avg_t2
+               FROM forecast_runs
+               WHERE parsed_score_team_1 IS NOT NULL AND parsed_score_team_2 IS NOT NULL
+               GROUP BY match_id
+               ORDER BY n DESC"""
+        ).fetchall()]
+        # Attach the single most-predicted scoreline per match.
+        for m in by_match:
+            top = conn.execute(
+                """SELECT (parsed_score_team_1 || '-' || parsed_score_team_2) AS scoreline,
+                          COUNT(*) AS cnt
+                   FROM forecast_runs
+                   WHERE match_id = ? AND parsed_score_team_1 IS NOT NULL
+                     AND parsed_score_team_2 IS NOT NULL
+                   GROUP BY scoreline ORDER BY cnt DESC LIMIT 1""",
+                (m["match_id"],),
+            ).fetchone()
+            m["top_scoreline"] = top["scoreline"] if top else None
+
         return {
             "totals": {
                 "total": total, "success": success, "errors": errors,
                 "manual": manual, "valid_json": valid_json,
+                "total_tokens": total_tokens, "total_cost": total_cost,
+                "avg_latency": avg_latency,
             },
             "by_model": by_model,
             "by_prompt": by_prompt,
@@ -262,6 +311,8 @@ def get_dashboard():
             },
             "top_scores": top_scores,
             "prob_by_model": prob_by_model,
+            "goals_hist": goals_hist,
+            "by_match": by_match,
         }
     finally:
         conn.close()
@@ -294,13 +345,29 @@ def _parse_local(value: str | None) -> datetime | None:
     return None
 
 
-def _scheduled_local(kickoff_local: str | None, moment: str) -> str | None:
-    """When this run is intended to fire = kickoff (local) + moment offset."""
+# Match times in the dataset are local Brazil time (UTC-3).
+LOCAL_TZ = timezone(timedelta(hours=-3))
+
+
+def _scheduled_dt_local(kickoff_local: str | None, moment: str) -> datetime | None:
+    """tz-aware local datetime when this run should fire (kickoff + offset)."""
     dt = _parse_local(kickoff_local)
     if dt is None:
         return None
     dt += timedelta(minutes=MOMENT_OFFSET_MINUTES.get(moment, 0))
-    return dt.strftime("%Y-%m-%d %H:%M")
+    return dt.replace(tzinfo=LOCAL_TZ)
+
+
+def _scheduled_local(kickoff_local: str | None, moment: str) -> str | None:
+    """When this run is intended to fire = kickoff (local) + moment offset."""
+    dt = _scheduled_dt_local(kickoff_local, moment)
+    return dt.strftime("%Y-%m-%d %H:%M") if dt else None
+
+
+def _scheduled_utc(kickoff_local: str | None, moment: str) -> str | None:
+    """Same instant as :func:`_scheduled_local` but as a UTC ISO string."""
+    dt = _scheduled_dt_local(kickoff_local, moment)
+    return dt.astimezone(timezone.utc).isoformat() if dt else None
 
 
 class PlanRequest(BaseModel):
@@ -337,6 +404,7 @@ def _iter_plan(config, req: PlanRequest):
                                 "teams": f"{match.team_1} vs {match.team_2}",
                                 "kickoff_local": match.kickoff_local,
                                 "scheduled_local": _scheduled_local(match.kickoff_local, moment),
+                                "scheduled_utc": _scheduled_utc(match.kickoff_local, moment),
                                 "model": model["key"],
                                 "prompt_id": prompt_id,
                                 "team_order_type": order,
@@ -393,14 +461,23 @@ def _ensure_planned_table(conn: sqlite3.Connection) -> None:
             teams TEXT,
             kickoff_local TEXT,
             scheduled_local TEXT,
+            scheduled_utc TEXT,
             model TEXT,
             prompt_id TEXT,
             team_order_type TEXT,
             match_moment TEXT,
             repetition_number INTEGER,
+            status TEXT DEFAULT 'scheduled',
             created_at TEXT
         )"""
     )
+    # Migrate older tables that pre-date the scheduler columns.
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(planned_runs)")}
+    if "scheduled_utc" not in existing:
+        conn.execute("ALTER TABLE planned_runs ADD COLUMN scheduled_utc TEXT")
+    if "status" not in existing:
+        conn.execute("ALTER TABLE planned_runs ADD COLUMN status TEXT DEFAULT 'scheduled'")
+    conn.commit()
 
 
 @app.post("/api/plan/save")
@@ -417,13 +494,13 @@ def save_plan(req: PlanRequest):
             conn.execute(
                 """INSERT OR IGNORE INTO planned_runs
                    (run_id, match_id, teams, kickoff_local, scheduled_local,
-                    model, prompt_id, team_order_type, match_moment,
-                    repetition_number, created_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                    scheduled_utc, model, prompt_id, team_order_type, match_moment,
+                    repetition_number, status, created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (row["run_id"], row["match_id"], row["teams"],
-                 row["kickoff_local"], row["scheduled_local"], row["model"],
-                 row["prompt_id"], row["team_order_type"], row["match_moment"],
-                 row["repetition_number"], now),
+                 row["kickoff_local"], row["scheduled_local"], row["scheduled_utc"],
+                 row["model"], row["prompt_id"], row["team_order_type"],
+                 row["match_moment"], row["repetition_number"], "scheduled", now),
             )
             saved += 1
         conn.commit()
@@ -434,8 +511,8 @@ def save_plan(req: PlanRequest):
 
 
 @app.get("/api/planned")
-def list_planned(only: str = Query("all", pattern="^(all|pending|done)$")):
-    """List persisted planned runs, flagging which have already executed."""
+def list_planned(only: str = Query("all", pattern="^(all|pending|done|cancelled)$")):
+    """List persisted planned runs with their effective scheduler state."""
     config = load_config()
     db_path = cfg.ROOT / config.database_path
     conn = sqlite3.connect(db_path)
@@ -446,27 +523,56 @@ def list_planned(only: str = Query("all", pattern="^(all|pending|done)$")):
             """SELECT p.*,
                       f.execution_status AS execution_status,
                       f.parsed_score_team_1 AS parsed_score_team_1,
-                      f.parsed_score_team_2 AS parsed_score_team_2
+                      f.parsed_score_team_2 AS parsed_score_team_2,
+                      f.error_message AS error_message
                FROM planned_runs p
                LEFT JOIN forecast_runs f ON f.run_id = p.run_id
                ORDER BY (p.scheduled_local IS NULL), p.scheduled_local,
                         p.match_id, p.model"""
         ).fetchall()
+        now_iso = datetime.now(timezone.utc).isoformat()
         out = []
-        pending = done = 0
+        counts = {"pending": 0, "done": 0, "cancelled": 0, "running": 0}
         for r in rows:
             d = dict(r)
-            d["done"] = d.get("execution_status") is not None
-            if d["done"]:
-                done += 1
+            executed = d.get("execution_status") is not None
+            raw_status = d.get("status") or "scheduled"
+            if executed:
+                effective = "done"
+            elif raw_status == "cancelled":
+                effective = "cancelled"
+            elif raw_status == "running":
+                effective = "running"
+            elif raw_status in ("done", "error"):
+                effective = raw_status
             else:
-                pending += 1
+                # scheduled: overdue if its time has passed but it hasn't fired
+                su = d.get("scheduled_utc")
+                effective = "overdue" if (su and su <= now_iso) else "scheduled"
+            d["effective_status"] = effective
+            d["done"] = effective in ("done",)
+            if effective in ("done", "error"):
+                counts["done"] += 1
+            elif effective == "cancelled":
+                counts["cancelled"] += 1
+            elif effective == "running":
+                counts["running"] += 1
+            else:
+                counts["pending"] += 1
             out.append(d)
         if only == "pending":
-            out = [r for r in out if not r["done"]]
+            out = [r for r in out if r["effective_status"] in ("scheduled", "overdue", "running")]
         elif only == "done":
-            out = [r for r in out if r["done"]]
-        return {"total": len(rows), "pending": pending, "done": done, "rows": out}
+            out = [r for r in out if r["effective_status"] in ("done", "error")]
+        elif only == "cancelled":
+            out = [r for r in out if r["effective_status"] == "cancelled"]
+        return {
+            "total": len(rows),
+            "pending": counts["pending"] + counts["running"],
+            "done": counts["done"],
+            "cancelled": counts["cancelled"],
+            "rows": out,
+        }
     finally:
         conn.close()
 
@@ -491,6 +597,200 @@ def clear_planned(scope: str = Query("all", pattern="^(all|done)$")):
         return {"remaining": remaining}
     finally:
         conn.close()
+
+
+class CancelRequest(BaseModel):
+    run_ids: Optional[list[str]] = None  # None => all future scheduled runs
+
+
+@app.post("/api/planned/cancel")
+def cancel_planned(req: CancelRequest):
+    """Cancel future runs so the scheduler skips them.
+
+    With ``run_ids`` cancels those specific rows; without it cancels every run
+    still waiting to fire. Already-executed runs are left untouched.
+    """
+    config = load_config()
+    db_path = cfg.ROOT / config.database_path
+    conn = sqlite3.connect(db_path)
+    try:
+        _ensure_planned_table(conn)
+        executed = "run_id NOT IN (SELECT run_id FROM forecast_runs)"
+        if req.run_ids:
+            ph = ",".join("?" * len(req.run_ids))
+            cur = conn.execute(
+                f"""UPDATE planned_runs SET status='cancelled'
+                    WHERE status IN ('scheduled','running') AND {executed}
+                      AND run_id IN ({ph})""",
+                req.run_ids,
+            )
+        else:
+            cur = conn.execute(
+                f"""UPDATE planned_runs SET status='cancelled'
+                    WHERE status IN ('scheduled','running') AND {executed}"""
+            )
+        conn.commit()
+        return {"cancelled": cur.rowcount}
+    finally:
+        conn.close()
+
+
+@app.post("/api/planned/reactivate")
+def reactivate_planned(req: CancelRequest):
+    """Re-enable previously cancelled runs (back to 'scheduled')."""
+    config = load_config()
+    db_path = cfg.ROOT / config.database_path
+    conn = sqlite3.connect(db_path)
+    try:
+        _ensure_planned_table(conn)
+        if req.run_ids:
+            ph = ",".join("?" * len(req.run_ids))
+            cur = conn.execute(
+                f"UPDATE planned_runs SET status='scheduled' "
+                f"WHERE status='cancelled' AND run_id IN ({ph})",
+                req.run_ids,
+            )
+        else:
+            cur = conn.execute(
+                "UPDATE planned_runs SET status='scheduled' WHERE status='cancelled'"
+            )
+        conn.commit()
+        return {"reactivated": cur.rowcount}
+    finally:
+        conn.close()
+
+
+# ── Background scheduler ───────────────────────────────────────────────────────
+# A lightweight daemon thread fires planned runs once their scheduled time
+# (kickoff + moment offset) arrives. So "rodar no intervalo" actually executes
+# at half-time without anyone clicking a button.
+
+SCHEDULER_INTERVAL = float(os.environ.get("FIFA_SCHEDULER_INTERVAL", "30"))
+SCHEDULER_ENABLED = os.environ.get("FIFA_SCHEDULER", "1") != "0"
+
+_scheduler_stop = threading.Event()
+_scheduler_lock = threading.Lock()
+
+
+def _due_planned(conn: sqlite3.Connection, now_iso: str) -> list[sqlite3.Row]:
+    """Planned rows whose time has arrived and that still need to run."""
+    return conn.execute(
+        """SELECT p.* FROM planned_runs p
+           WHERE p.status = 'scheduled'
+             AND p.scheduled_utc IS NOT NULL
+             AND p.scheduled_utc <= ?
+             AND p.run_id NOT IN (SELECT run_id FROM forecast_runs)
+           ORDER BY p.scheduled_utc
+           LIMIT 25""",
+        (now_iso,),
+    ).fetchall()
+
+
+def _execute_planned_row(row: dict) -> str:
+    """Fire a single planned execution via the experiment runner."""
+    config = load_config()
+    model_config = next((m for m in config.models if m["key"] == row["model"]), None)
+    if model_config is None:
+        return f"ERR model {row['model']} not in config"
+    matches = load_matches(cfg.ROOT / config.matches_csv)
+    match = next((m for m in matches if str(m.match_id) == str(row["match_id"])), None)
+    if match is None:
+        return f"ERR match {row['match_id']} not found"
+
+    runner = ExperimentRunner(config, overwrite=False, progress=lambda m: None)
+    try:
+        return runner._execute_one(
+            match,
+            row["team_order_type"],
+            row["match_moment"],
+            model_config,
+            row["prompt_id"],
+            int(row["repetition_number"] or 1),
+        )
+    finally:
+        runner.close()
+
+
+def _scheduler_tick() -> None:
+    db_path = cfg.ROOT / load_config().database_path
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        _ensure_planned_table(conn)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        # Reconcile rows already executed (e.g. via the Rodar tab).
+        conn.execute(
+            """UPDATE planned_runs SET status='done'
+               WHERE status IN ('scheduled','running')
+                 AND run_id IN (SELECT run_id FROM forecast_runs)"""
+        )
+        conn.commit()
+        due = [dict(r) for r in _due_planned(conn, now_iso)]
+    finally:
+        conn.close()
+
+    for row in due:
+        rid = row["run_id"]
+        # Claim the row so a concurrent tick won't double-fire it.
+        conn = sqlite3.connect(db_path)
+        try:
+            cur = conn.execute(
+                "UPDATE planned_runs SET status='running' "
+                "WHERE run_id=? AND status='scheduled'",
+                (rid,),
+            )
+            conn.commit()
+            claimed = cur.rowcount == 1
+        finally:
+            conn.close()
+        if not claimed:
+            continue
+
+        try:
+            detail = _execute_planned_row(row)
+            new_status = "error" if detail.strip().startswith("ERR") else "done"
+        except Exception as exc:  # noqa: BLE001 - keep the scheduler alive
+            traceback.print_exc()
+            detail, new_status = f"ERR {exc!r}", "error"
+
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute(
+                "UPDATE planned_runs SET status=? WHERE run_id=?", (new_status, rid)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        print(f"[scheduler] {new_status}: {detail}", flush=True)
+
+
+def _scheduler_loop() -> None:
+    # First tick after a short delay so startup finishes first.
+    while not _scheduler_stop.wait(SCHEDULER_INTERVAL):
+        if not _scheduler_lock.acquire(blocking=False):
+            continue
+        try:
+            _scheduler_tick()
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+        finally:
+            _scheduler_lock.release()
+
+
+@app.on_event("startup")
+def _start_scheduler() -> None:
+    if not SCHEDULER_ENABLED:
+        print("[scheduler] disabled (FIFA_SCHEDULER=0)", flush=True)
+        return
+    threading.Thread(target=_scheduler_loop, daemon=True, name="fifa-scheduler").start()
+    print(
+        f"[scheduler] started — checking every {SCHEDULER_INTERVAL:.0f}s", flush=True
+    )
+
+
+@app.on_event("shutdown")
+def _stop_scheduler() -> None:
+    _scheduler_stop.set()
 
 
 class RunRequest(BaseModel):

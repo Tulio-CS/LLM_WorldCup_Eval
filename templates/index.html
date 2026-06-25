@@ -357,18 +357,25 @@
 
 <!-- ═══════════════════════ TAB: PLANEJADO ═══════════════════════ -->
 <div id="tab-planned" class="tab-pane hidden p-6 max-w-7xl mx-auto">
-  <div class="flex items-center justify-between mb-4">
+  <div id="scheduler-banner" class="bg-sky-950/40 border border-sky-900 rounded-lg px-4 py-2.5 mb-4 text-xs text-sky-200 flex items-center gap-2">
+    <span class="text-base">⏱️</span>
+    <span>O agendador roda automaticamente cada execução no seu horário (kickoff + momento). <b>Antes do jogo</b> ≈ 5 min antes, <b>Intervalo</b> ≈ 55 min, <b>Final</b> ≈ 115 min. Cancele aqui o que não quiser que rode.</span>
+  </div>
+  <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
     <div>
       <h2 class="text-sm font-semibold text-slate-300 uppercase tracking-wide">Execuções planejadas (salvas)</h2>
       <p id="planned-summary" class="text-xs text-slate-500 mt-1">—</p>
     </div>
-    <div class="flex items-center gap-2">
+    <div class="flex items-center gap-2 flex-wrap">
       <select id="planned-filter" onchange="loadPlanned()" class="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sm text-slate-200">
         <option value="all">Todas</option>
         <option value="pending" selected>Pendentes</option>
         <option value="done">Concluídas</option>
+        <option value="cancelled">Canceladas</option>
       </select>
       <button onclick="loadPlanned()" class="bg-slate-700 hover:bg-slate-600 text-sm px-3 py-1 rounded transition">↻ Atualizar</button>
+      <button onclick="cancelSelected()" class="bg-amber-700 hover:bg-amber-600 text-sm px-3 py-1 rounded transition">🚫 Cancelar selecionadas</button>
+      <button onclick="cancelAllFuture()" class="bg-amber-800 hover:bg-amber-700 text-sm px-3 py-1 rounded transition">Cancelar todas futuras</button>
       <button onclick="clearPlanned('done')" class="bg-slate-700 hover:bg-slate-600 text-sm px-3 py-1 rounded transition">Limpar concluídas</button>
       <button onclick="clearPlanned('all')" class="bg-red-800 hover:bg-red-700 text-sm px-3 py-1 rounded transition">Limpar tudo</button>
     </div>
@@ -377,6 +384,7 @@
     <table class="w-full text-xs">
       <thead class="bg-slate-800 text-slate-400 uppercase tracking-wide">
         <tr>
+          <th class="px-2 py-2 text-center"><input type="checkbox" id="planned-all" onchange="togglePlannedAll(this)" class="accent-sky-500" /></th>
           <th class="px-3 py-2 text-left">Quando</th>
           <th class="px-3 py-2 text-left">Partida</th>
           <th class="px-3 py-2 text-left">Modelo</th>
@@ -385,14 +393,15 @@
           <th class="px-3 py-2 text-center">Momento</th>
           <th class="px-3 py-2 text-center">Status</th>
           <th class="px-3 py-2 text-center">Placar</th>
+          <th class="px-3 py-2 text-center">Ação</th>
         </tr>
       </thead>
       <tbody id="planned-body" class="divide-y divide-slate-800 text-slate-300">
-        <tr><td colspan="8" class="px-3 py-6 text-center text-slate-500">Carregando…</td></tr>
+        <tr><td colspan="10" class="px-3 py-6 text-center text-slate-500">Carregando…</td></tr>
       </tbody>
     </table>
   </div>
-  <p class="text-xs text-slate-600 mt-2">A lista é salva no banco (sobrevive a refresh). Salve um plano pela aba <b>Rodar → Ver plano → Salvar plano</b>.</p>
+  <p class="text-xs text-slate-600 mt-2">A lista é salva no banco (sobrevive a refresh e a redeploy). Salve um plano pela aba <b>Rodar → Ver plano → Salvar plano</b>.</p>
 </div>
 
 <!-- ═══════════════════════ TAB: DASHBOARD ═══════════════════════ -->
@@ -424,6 +433,7 @@
             <th class="px-2 py-1.5 text-center">Sucesso</th>
             <th class="px-2 py-1.5 text-center">Erros</th>
             <th class="px-2 py-1.5 text-center">JSON válido</th>
+            <th class="px-2 py-1.5 text-center">Confiança</th>
             <th class="px-2 py-1.5 text-center">Latência média</th>
             <th class="px-2 py-1.5 text-center">Tokens médios</th>
             <th class="px-2 py-1.5 text-center">Custo total</th>
@@ -443,6 +453,19 @@
     <div class="bg-slate-900 rounded-lg p-4 border border-slate-800">
       <h3 class="text-sm font-semibold text-slate-300 mb-3">Por prompt &amp; momento</h3>
       <div id="dash-breakdown" class="text-xs text-slate-300 space-y-3">—</div>
+    </div>
+  </div>
+
+  <!-- Goals histogram + consensus by match -->
+  <div class="grid lg:grid-cols-2 gap-5">
+    <div class="bg-slate-900 rounded-lg p-4 border border-slate-800">
+      <h3 class="text-sm font-semibold text-slate-300 mb-3">Distribuição de gols por jogo (previstos)</h3>
+      <div id="dash-goals" class="space-y-1.5">—</div>
+    </div>
+    <div class="bg-slate-900 rounded-lg p-4 border border-slate-800">
+      <h3 class="text-sm font-semibold text-slate-300 mb-1">Consenso por partida</h3>
+      <p class="text-xs text-slate-500 mb-3">Como os modelos se dividem em cada jogo (vitória time 1 / empate / time 2).</p>
+      <div id="dash-matches" class="space-y-2 max-h-96 overflow-y-auto pr-1">—</div>
     </div>
   </div>
 </div>
@@ -809,34 +832,53 @@ async function savePlan() {
 }
 
 // ── Planejado tab ───────────────────────────────────────────────────────────
+const PLANNED_STATUS = {
+  scheduled: { label: 'agendado',  cls: 'text-sky-400' },
+  overdue:   { label: 'atrasado',  cls: 'text-amber-400' },
+  running:   { label: 'rodando…',  cls: 'text-yellow-300 animate-pulse' },
+  done:      { label: 'concluído', cls: 'text-green-400' },
+  error:     { label: 'erro',      cls: 'text-red-400' },
+  cancelled: { label: 'cancelado', cls: 'text-slate-500 line-through' },
+};
+
 async function loadPlanned() {
   const filter = document.getElementById('planned-filter').value;
   const body = document.getElementById('planned-body');
-  body.innerHTML = '<tr><td colspan="8" class="px-3 py-6 text-center text-slate-500">Carregando…</td></tr>';
+  document.getElementById('planned-all').checked = false;
+  body.innerHTML = '<tr><td colspan="10" class="px-3 py-6 text-center text-slate-500">Carregando…</td></tr>';
   let data;
   try {
     const res = await fetch('/api/planned?only=' + filter);
     data = await res.json();
   } catch (e) {
-    body.innerHTML = `<tr><td colspan="8" class="px-3 py-6 text-center text-red-400">${e}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="10" class="px-3 py-6 text-center text-red-400">${e}</td></tr>`;
     return;
   }
   document.getElementById('planned-summary').innerHTML =
     `<span class="text-white font-semibold">${data.total}</span> salvas · ` +
     `<span class="text-sky-400 font-semibold">${data.pending}</span> pendentes · ` +
-    `<span class="text-green-400 font-semibold">${data.done}</span> concluídas`;
+    `<span class="text-green-400 font-semibold">${data.done}</span> concluídas · ` +
+    `<span class="text-slate-400 font-semibold">${data.cancelled || 0}</span> canceladas`;
 
   if (!data.rows.length) {
-    body.innerHTML = '<tr><td colspan="8" class="px-3 py-6 text-center text-slate-500">Nenhuma execução planejada nesse filtro</td></tr>';
+    body.innerHTML = '<tr><td colspan="10" class="px-3 py-6 text-center text-slate-500">Nenhuma execução planejada nesse filtro</td></tr>';
     return;
   }
   body.innerHTML = data.rows.map(r => {
-    const st = r.done
-      ? `<span class="status-success font-medium">${esc(r.execution_status || 'feito')}</span>`
-      : '<span class="status-skipped font-medium">pendente</span>';
+    const eff = r.effective_status || (r.done ? 'done' : 'scheduled');
+    const meta = PLANNED_STATUS[eff] || { label: eff, cls: 'text-slate-400' };
+    const st = `<span class="font-medium ${meta.cls}" title="${esc(r.error_message || '')}">${meta.label}</span>`;
     const score = (r.parsed_score_team_1 != null && r.parsed_score_team_2 != null)
       ? `${r.parsed_score_team_1}–${r.parsed_score_team_2}` : '—';
-    return `<tr class="${r.done ? 'opacity-60' : ''}">
+    const cancellable = (eff === 'scheduled' || eff === 'overdue');
+    const action = cancellable
+      ? `<button onclick="cancelOne('${r.run_id}')" class="text-amber-400 hover:text-amber-300">cancelar</button>`
+      : (eff === 'cancelled'
+          ? `<button onclick="reactivateOne('${r.run_id}')" class="text-sky-400 hover:text-sky-300">reativar</button>`
+          : '<span class="text-slate-600">—</span>');
+    const dim = (eff === 'done' || eff === 'cancelled') ? 'opacity-60' : '';
+    return `<tr class="${dim}">
+      <td class="px-2 py-1.5 text-center">${cancellable ? `<input type="checkbox" class="planned-cb accent-amber-500" value="${r.run_id}" />` : ''}</td>
       <td class="px-3 py-1.5 whitespace-nowrap font-mono text-slate-300">${r.scheduled_local || '—'}</td>
       <td class="px-3 py-1.5 whitespace-nowrap">${esc(r.teams)}</td>
       <td class="px-3 py-1.5 font-mono">${esc(r.model)}</td>
@@ -845,14 +887,59 @@ async function loadPlanned() {
       <td class="px-3 py-1.5 text-center text-slate-400 whitespace-nowrap">${momentLabel(r.match_moment)}</td>
       <td class="px-3 py-1.5 text-center">${st}</td>
       <td class="px-3 py-1.5 text-center font-mono">${score}</td>
+      <td class="px-3 py-1.5 text-center">${action}</td>
     </tr>`;
   }).join('');
 }
 
+function togglePlannedAll(cb) {
+  document.querySelectorAll('.planned-cb').forEach(x => x.checked = cb.checked);
+}
+
+async function cancelOne(runId) {
+  await fetch('/api/planned/cancel', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ run_ids: [runId] }),
+  });
+  loadPlanned();
+}
+
+async function reactivateOne(runId) {
+  await fetch('/api/planned/reactivate', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ run_ids: [runId] }),
+  });
+  loadPlanned();
+}
+
+async function cancelSelected() {
+  const ids = [...document.querySelectorAll('.planned-cb:checked')].map(c => c.value);
+  if (!ids.length) { alert('Marque as execuções que quer cancelar.'); return; }
+  if (!confirm(`Cancelar ${ids.length} execução(ões) futura(s)?`)) return;
+  const res = await fetch('/api/planned/cancel', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ run_ids: ids }),
+  });
+  const d = await res.json();
+  alert(`${d.cancelled} cancelada(s).`);
+  loadPlanned();
+}
+
+async function cancelAllFuture() {
+  if (!confirm('Cancelar TODAS as execuções que ainda não rodaram?')) return;
+  const res = await fetch('/api/planned/cancel', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ run_ids: null }),
+  });
+  const d = await res.json();
+  alert(`${d.cancelled} cancelada(s).`);
+  loadPlanned();
+}
+
 async function clearPlanned(scope) {
   const msg = scope === 'all'
-    ? 'Remover TODAS as execuções planejadas salvas?'
-    : 'Remover as planejadas que já foram concluídas?';
+    ? 'Remover TODAS as execuções planejadas salvas? (apaga a lista, não cancela)'
+    : 'Remover da lista as planejadas que já foram concluídas?';
   if (!confirm(msg)) return;
   await fetch('/api/planned/clear?scope=' + scope, { method: 'POST' });
   loadPlanned();
@@ -875,13 +962,17 @@ async function loadDashboard() {
   } catch (e) { return; }
 
   const t = d.totals;
+  const fmtTok = t.total_tokens >= 1000 ? (t.total_tokens/1000).toFixed(1) + 'k' : t.total_tokens;
   document.getElementById('dash-kpis').innerHTML =
     kpiCard('Total de execuções', t.total) +
     kpiCard('Sucesso', t.success, 'text-green-400') +
     kpiCard('Erros', t.errors, 'text-red-400') +
-    kpiCard('Manuais', t.manual, 'text-violet-400') +
+    kpiCard('Taxa de sucesso', pct(t.success, t.total) + '%', 'text-emerald-400') +
     kpiCard('JSON válido', t.valid_json, 'text-sky-400') +
-    kpiCard('Taxa de sucesso', pct(t.success, t.total) + '%', 'text-emerald-400');
+    kpiCard('Manuais', t.manual, 'text-violet-400') +
+    kpiCard('Tokens totais', fmtTok, 'text-amber-400') +
+    kpiCard('Custo total', '$' + Number(t.total_cost || 0).toFixed(4), 'text-amber-400') +
+    kpiCard('Latência média', t.avg_latency != null ? Math.round(t.avg_latency) + ' ms' : '—', 'text-slate-300');
 
   // Predictions
   const p = d.predictions;
@@ -920,10 +1011,11 @@ async function loadDashboard() {
       <td class="px-2 py-1.5 text-center text-green-400">${m.success} <span class="text-slate-600">(${pct(m.success, m.total)}%)</span></td>
       <td class="px-2 py-1.5 text-center text-red-400">${m.errors}</td>
       <td class="px-2 py-1.5 text-center text-sky-400">${m.valid_json}</td>
+      <td class="px-2 py-1.5 text-center text-slate-300">${m.avg_confidence != null ? Math.round(m.avg_confidence) + '%' : '—'}</td>
       <td class="px-2 py-1.5 text-center text-slate-400">${m.avg_latency != null ? Math.round(m.avg_latency) + ' ms' : '—'}</td>
       <td class="px-2 py-1.5 text-center text-slate-400">${m.avg_tokens != null ? Math.round(m.avg_tokens) : '—'}</td>
       <td class="px-2 py-1.5 text-center text-slate-400">${m.total_cost ? '$' + Number(m.total_cost).toFixed(4) : '—'}</td>
-    </tr>`).join('') || '<tr><td colspan="8" class="px-2 py-4 text-center text-slate-500">Sem dados</td></tr>';
+    </tr>`).join('') || '<tr><td colspan="9" class="px-2 py-4 text-center text-slate-500">Sem dados</td></tr>';
 
   // Probabilities by model
   document.getElementById('dash-probs').innerHTML = d.prob_by_model.length
@@ -948,6 +1040,44 @@ async function loadDashboard() {
   document.getElementById('dash-breakdown').innerHTML =
     `<div><div class="text-slate-500 uppercase text-[10px] tracking-wide mb-1">Por prompt (sucesso/total)</div>${promptRows || '—'}</div>` +
     `<div><div class="text-slate-500 uppercase text-[10px] tracking-wide mb-1">Por momento (sucesso/total)</div>${momentRows || '—'}</div>`;
+
+  // Goals histogram — distribution of predicted total goals per match
+  const gh = d.goals_hist || [];
+  const maxGoals = Math.max(1, ...gh.map(g => g.cnt));
+  document.getElementById('dash-goals').innerHTML = gh.length
+    ? gh.map(g => `
+      <div class="flex items-center gap-2">
+        <span class="font-mono text-slate-200 w-8 text-right">${g.goals}</span>
+        <div class="flex-1 bg-slate-800 rounded h-4 overflow-hidden">
+          <div class="bg-emerald-600 h-full" style="width:${pct(g.cnt, maxGoals)}%"></div>
+        </div>
+        <span class="text-slate-400 w-8 text-right">${g.cnt}</span>
+      </div>`).join('')
+    : '<span class="text-slate-500 text-sm">Sem previsões com placar ainda.</span>';
+
+  // Per-match consensus — how models collectively lean for each match
+  const bm = d.by_match || [];
+  document.getElementById('dash-matches').innerHTML = bm.length
+    ? bm.map(m => {
+        const tot = (m.t1_win + m.draw + m.t2_win) || 1;
+        const a = pct(m.t1_win, tot), b = pct(m.draw, tot), c = pct(m.t2_win, tot);
+        return `<div class="bg-slate-800/50 rounded p-2">
+          <div class="flex justify-between items-baseline mb-1">
+            <span class="text-slate-200 truncate pr-2">${esc(m.team_1)} <span class="text-slate-500">vs</span> ${esc(m.team_2)}</span>
+            <span class="text-[10px] text-slate-500 whitespace-nowrap">n=${m.n}${m.phase ? ' · ' + esc(m.phase) : ''}</span>
+          </div>
+          <div class="flex h-4 rounded overflow-hidden text-[9px] font-medium text-white mb-1">
+            <div class="bg-sky-600 flex items-center justify-center" style="width:${a}%" title="Vitória ${esc(m.team_1)}">${a > 8 ? a + '%' : ''}</div>
+            <div class="bg-slate-600 flex items-center justify-center" style="width:${b}%" title="Empate">${b > 8 ? b + '%' : ''}</div>
+            <div class="bg-rose-600 flex items-center justify-center" style="width:${c}%" title="Vitória ${esc(m.team_2)}">${c > 8 ? c + '%' : ''}</div>
+          </div>
+          <div class="flex justify-between text-[10px] text-slate-400">
+            <span>Média ${(m.avg_t1||0).toFixed(1)}–${(m.avg_t2||0).toFixed(1)}</span>
+            <span>Placar + provável: <span class="font-mono text-slate-300">${m.top_scoreline ? esc(m.top_scoreline) : '—'}</span></span>
+          </div>
+        </div>`;
+      }).join('')
+    : '<span class="text-slate-500 text-sm">Sem previsões com placar ainda.</span>';
 }
 
 // ── Results tab ────────────────────────────────────────────────────────────

@@ -1,0 +1,10 @@
+{
+  "provider": "openai",
+  "model_id": "gpt-5",
+  "system": "You are an expert football (soccer) analyst forecasting FIFA World Cup 2026 matches. Follow the output format exactly and return only what is requested.",
+  "prompt": "Context:\nScheduled kickoff time (local, UTC-3): 2026-06-22 14:00.\nYou are making this forecast right after the final whistle, with the match finished.\n\nYou are forecasting a FIFA World Cup 2026 match.\n\nPredict the result of the match Argentina vs Austria.\n\nReturn ONLY a valid JSON object:\n\n{\n  \"score_team_1\": <integer>,\n  \"score_team_2\": <integer>\n}",
+  "params": {
+    "reasoning_effort": "medium",
+    "max_output_tokens": 8000
+  }
+}
