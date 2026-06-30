@@ -178,12 +178,16 @@ def _summary() -> dict[str, Any]:
 def _matches_overview(config: cfg.Config) -> list[dict[str, Any]]:
     matches = load_matches(cfg.ROOT / config.matches_csv)
     path = _db_path()
-    pred_ids: set[str] = set()
+    runs: dict[str, tuple[int, int]] = {}   # match_id -> (n_runs, n_models)
     finished_ids: set[str] = set()
     if path.exists():
         con = sqlite3.connect(path)
         try:
-            pred_ids = {r[0] for r in con.execute("SELECT DISTINCT match_id FROM forecast_runs")}
+            for mid, n, nm in con.execute(
+                "SELECT match_id, COUNT(*), COUNT(DISTINCT model) "
+                "FROM forecast_runs GROUP BY match_id"
+            ):
+                runs[mid] = (int(n), int(nm))
             try:
                 finished_ids = {
                     r[0] for r in con.execute(
@@ -196,10 +200,12 @@ def _matches_overview(config: cfg.Config) -> list[dict[str, Any]]:
             con.close()
     out = []
     for m in matches:
+        n_runs, n_models = runs.get(m.match_id, (0, 0))
         out.append({
             "match_id": m.match_id, "team_1": m.team_1, "team_2": m.team_2,
             "local_date": m.local_date, "phase": m.phase,
-            "has_predictions": m.match_id in pred_ids,
+            "has_predictions": n_runs > 0,
+            "n_runs": n_runs, "n_models": n_models,
             "finished": m.match_id in finished_ids,
             "label": f"{m.match_id}. {m.team_1} vs {m.team_2} ({m.local_date})",
         })
@@ -605,11 +611,13 @@ tr:hover td{background:#0e1726}
       <h2>Run a collection</h2>
       <div style="margin-bottom:14px">
         <label>Matches — check one or many (none = all)</label>
+        <div class="small" id="matchCoverage" style="margin-bottom:8px"></div>
         <input type="text" id="runMatchSearch" placeholder="filter by team, date or phase…" style="margin-bottom:8px">
+        <label class="chk" style="display:inline-flex;margin-bottom:8px"><input type="checkbox" id="hideRun"> show only not-run yet</label>
         <div id="runMatchList" class="picklist"></div>
         <div class="small muted" style="margin-top:6px">
           <a href="#" id="matchAll">all</a> · <a href="#" id="matchNone">none</a> ·
-          <a href="#" id="matchShown">select shown</a> · <b id="matchCount"></b></div>
+          <a href="#" id="matchNotRun">select not-run</a> · <a href="#" id="matchShown">select shown</a> · <b id="matchCount"></b></div>
       </div>
       <div style="margin-bottom:14px"><label>Moments</label><div class="checkset" id="runMoments"></div></div>
       <div style="margin-bottom:14px"><label>Models</label><div class="checkset" id="runModels"></div>
@@ -717,15 +725,23 @@ $$('.tab').forEach(t=>t.onclick=()=>tab(t.dataset.tab));
 function renderKpis(s){
   const k=$('#kpis');
   if(!s||!s.db_exists){k.innerHTML='<div class="kpi"><b>0</b><span>no data</span></div>';return;}
-  const items=[['total','runs'],['success','ok'],['error','errors'],['matches','matches'],['finished','finished']];
-  k.innerHTML=items.map(([key,lab])=>`<div class="kpi"><b>${s[key]??0}</b><span>${lab}</span></div>`).join('');
+  const tot=(BOOT&&BOOT.matches)?BOOT.matches.length:0;
+  let html=[['total','runs'],['success','ok'],['error','errors']]
+    .map(([key,lab])=>`<div class="kpi"><b>${s[key]??0}</b><span>${lab}</span></div>`).join('');
+  if(tot)html+=`<div class="kpi"><b style="color:var(--ok)">${s.matches??0}</b><span>matches run</span></div>`
+            +`<div class="kpi"><b style="color:var(--warn)">${tot-(s.matches||0)}</b><span>to run</span></div>`;
+  k.innerHTML=html;
 }
 function renderOvCards(s){
   const c=$('#ovCards');
   if(!s||!s.db_exists){c.innerHTML='<div class="card"><b>0</b><span>no database yet — run a collection</span></div>';return;}
+  const tot=(BOOT&&BOOT.matches)?BOOT.matches.length:0;
   const items=[['total','executions'],['success','success'],['error','errors'],['valid','valid JSON'],
-    ['matches','matches'],['models','models'],['results','results'],['finished','finished']];
-  c.innerHTML=items.map(([k,l])=>`<div class="card"><b>${s[k]??0}</b><span>${l}</span></div>`).join('');
+    ['models','models'],['results','results'],['finished','finished']];
+  let html=items.map(([k,l])=>`<div class="card"><b>${s[k]??0}</b><span>${l}</span></div>`).join('');
+  if(tot)html=`<div class="card"><b>${s.matches??0} / ${tot}</b><span>matches run</span></div>`
+              +`<div class="card"><b style="color:var(--warn)">${tot-(s.matches||0)}</b><span>matches to run</span></div>`+html;
+  c.innerHTML=html;
 }
 
 function table(rows,cols){
@@ -855,18 +871,31 @@ async function loadCompare(){
   }catch(e){$('#cmpTable').innerHTML='<p class="muted small" style="padding:10px">'+esc(e.message)+'</p>';}
 }
 
+function applyMatchFilter(){
+  const q=$('#runMatchSearch').value.toLowerCase(), onlyNot=$('#hideRun').checked;
+  [...$('#runMatchList').children].forEach(el=>{
+    el.style.display=(el.dataset.text.includes(q) && (!onlyNot || el.dataset.run==='0'))?'':'none';});
+}
 function buildMatchPicker(){
   const list=$('#runMatchList');
-  list.innerHTML=BOOT.matches.map(m=>
-    `<label class="chk" style="justify-content:flex-start" data-text="${esc((m.label+' '+(m.phase||'')).toLowerCase())}">
+  list.innerHTML=BOOT.matches.map(m=>{
+    const badge=m.has_predictions
+      ? `<span class="pill ok" title="${m.n_runs} runs · ${m.n_models} models">run · ${m.n_runs}</span>`
+      : `<span class="pill na">not run</span>`;
+    const fin=m.finished?` <span class="pill" style="color:#7eb0ff">finished</span>`:'';
+    return `<label class="chk" style="justify-content:flex-start" data-run="${m.has_predictions?1:0}" data-text="${esc((m.label+' '+(m.phase||'')).toLowerCase())}">
        <input type="checkbox" value="${esc(m.match_id)}"> ${esc(m.match_id)}. ${esc(m.team_1)} v ${esc(m.team_2)}
-       <span class="muted small">${esc(m.local_date||'')}${m.finished?' ✓':''}</span></label>`).join('');
+       <span class="muted small">${esc(m.local_date||'')}</span> ${badge}${fin}</label>`;}).join('');
   list.onchange=updateEstimate;
-  $('#runMatchSearch').oninput=e=>{const q=e.target.value.toLowerCase();
-    [...list.children].forEach(el=>el.style.display=el.dataset.text.includes(q)?'':'none');};
-  $('#matchAll').onclick=e=>{e.preventDefault();[...list.querySelectorAll('input')].forEach(i=>i.checked=true);updateEstimate();};
-  $('#matchNone').onclick=e=>{e.preventDefault();[...list.querySelectorAll('input')].forEach(i=>i.checked=false);updateEstimate();};
+  $('#runMatchSearch').oninput=applyMatchFilter;
+  $('#hideRun').onchange=applyMatchFilter;
+  const setAll=v=>{[...list.querySelectorAll('input')].forEach(i=>i.checked=v);updateEstimate();};
+  $('#matchAll').onclick=e=>{e.preventDefault();setAll(true);};
+  $('#matchNone').onclick=e=>{e.preventDefault();setAll(false);};
+  $('#matchNotRun').onclick=e=>{e.preventDefault();[...list.children].forEach(el=>el.querySelector('input').checked=(el.dataset.run==='0'));updateEstimate();};
   $('#matchShown').onclick=e=>{e.preventDefault();[...list.children].forEach(el=>{if(el.style.display!=='none')el.querySelector('input').checked=true;});updateEstimate();};
+  const run=BOOT.matches.filter(m=>m.has_predictions).length, tot=BOOT.matches.length;
+  $('#matchCoverage').innerHTML=`<b style="color:var(--ok)">${run}</b> already run · <b style="color:var(--warn)">${tot-run}</b> not run yet · ${tot} total`;
   updateEstimate();
 }
 
