@@ -557,7 +557,7 @@ tr:hover td{background:#0e1726}
 .pill.bad{color:#fff;background:var(--err);border-color:var(--err)}
 .pill.na{color:var(--muted)}
 .banner{background:#3a2a0a;border:1px solid #6b4e16;color:#f7d99a;padding:10px 14px;border-radius:10px;margin-bottom:16px}
-.hide{display:none}
+.hide{display:none!important}
 .toast{position:fixed;right:18px;bottom:18px;background:#0e1726;border:1px solid var(--border2);
   padding:12px 16px;border-radius:10px;max-width:360px;box-shadow:0 8px 30px #0008}
 .section-actions{display:flex;gap:10px;align-items:center;margin-top:10px;flex-wrap:wrap}
