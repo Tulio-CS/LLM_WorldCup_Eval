@@ -161,6 +161,23 @@ workbook gains a **Results** sheet and an **Eval Base** sheet — every predicti
 left-joined to its actual score and `actual_winner` (`team_1`/`team_2`/`draw`,
 canonical order), ready for accuracy/Brier/calibration analysis later.
 
+**Automatic fetching (football-data.org):** the `fetch` command pulls fixtures
+and finished scores from a sports API and maps them to your `match_id`s
+(accent/alias-normalized team names, unordered pairing). Get a free key at
+<https://www.football-data.org/> (free tier includes the World Cup), add
+`FOOTBALL_DATA_API_KEY=...` to `.env`, then:
+
+```bash
+python -m fifa_forecast fetch --results --dry-run   # preview the score mapping
+python -m fifa_forecast fetch --results             # ingest finished scores
+python -m fifa_forecast fetch --fixtures            # append newly-scheduled games to the CSV
+python -m fifa_forecast fetch --results --fixtures  # both
+```
+
+Games the API reports but can't be matched to your CSV (name mismatch, or not
+present) are listed, never guessed — add an alias in `fetch.py` `_ALIASES` or
+the game to the matches CSV. `--dry-run` writes nothing.
+
 ### Quality & variability report
 
 `report` reads the existing `fifa_forecasts.db` (no API calls) and answers:

@@ -29,7 +29,10 @@ except Exception:  # pragma: no cover
 # Paths
 # --------------------------------------------------------------------------- #
 ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = ROOT / "data"
+# DATA_DIR holds the SQLite DB archive, raw artifacts and exports. In a container
+# deployment, set FIFA_DATA_DIR to a mounted persistent volume (e.g. /data) so the
+# dataset survives redeploys; locally it defaults to <repo>/data.
+DATA_DIR = Path(os.environ["FIFA_DATA_DIR"]) if os.environ.get("FIFA_DATA_DIR") else (ROOT / "data")
 RAW_REQUESTS_DIR = DATA_DIR / "raw_requests"
 RAW_RESPONSES_DIR = DATA_DIR / "raw_responses"
 TRACES_DIR = DATA_DIR / "traces"
@@ -209,4 +212,13 @@ def load_config(overrides_path: str | os.PathLike | None = None) -> Config:
         for key, value in data.items():
             if hasattr(cfg, key):
                 setattr(cfg, key, value)
+
+    # Environment overrides (used by container deployments; take precedence).
+    # Absolute paths work directly because `ROOT / "/data/x"` resolves to "/data/x".
+    env_db = os.environ.get("FIFA_DATABASE_PATH")
+    if env_db:
+        cfg.database_path = env_db
+    env_matches = os.environ.get("FIFA_MATCHES_CSV")
+    if env_matches:
+        cfg.matches_csv = env_matches
     return cfg

@@ -18,6 +18,13 @@ from . import manifest as manifest_mod
 from .analysis import ReportOptions, build_report, print_report, write_report_excel
 from .cost import estimate_cost, print_estimate
 from .export import export_workbook
+from .fetch import (
+    build_new_fixtures,
+    build_results,
+    append_fixtures_to_csv,
+    fetch_world_cup,
+    resolve_api_key,
+)
 from .matches import filter_matches, load_matches
 from .results import load_results_csv, write_results_template
 from .runner import ExperimentRunner
@@ -165,6 +172,33 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-export", action="store_true", help="Skip rebuilding the Excel workbook."
     )
 
+    p_fetch = sub.add_parser(
+        "fetch",
+        help="Fetch fixtures/results from a sports API (default: football-data.org).",
+    )
+    _add_common(p_fetch)
+    p_fetch.add_argument(
+        "--results", action="store_true", help="Ingest finished match scores."
+    )
+    p_fetch.add_argument(
+        "--fixtures",
+        action="store_true",
+        help="Append newly-scheduled games (not yet in the CSV) to the matches CSV.",
+    )
+    p_fetch.add_argument("--competition", default="WC", help="Competition code (default WC).")
+    p_fetch.add_argument(
+        "--api-key", default=None, help="Override FOOTBALL_DATA_API_KEY from .env."
+    )
+    p_fetch.add_argument("--timeout", type=int, default=30)
+    p_fetch.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be ingested/appended without writing anything.",
+    )
+    p_fetch.add_argument(
+        "--no-export", action="store_true", help="Skip rebuilding the Excel workbook."
+    )
+
     p_info = sub.add_parser("info", help="Print the planned execution count.")
     _add_common(p_info)
     p_info.add_argument(
@@ -230,6 +264,57 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Wrote template with {n} matches: {out}")
         print("Fill in actual_score_team_1 / actual_score_team_2, then run: "
               "python -m fifa_forecast add-results --csv " + str(args.out))
+        return 0
+
+    if command == "fetch":
+        do_results = args.results or not args.fixtures  # default to results
+        do_fixtures = args.fixtures
+        key = resolve_api_key(args.api_key)
+        matches_path = cfg.ROOT / config.matches_csv
+        print(f"Fetching competition {args.competition!r} from football-data.org ...")
+        api_matches = fetch_world_cup(
+            key, competition=args.competition, timeout=args.timeout
+        )
+        print(f"  {len(api_matches)} matches returned by the API.")
+        local = load_matches(matches_path)
+
+        if do_fixtures:
+            rows = build_new_fixtures(api_matches, local)
+            if not rows:
+                print("Fixtures: nothing new to add.")
+            elif args.dry_run:
+                print(f"Fixtures (dry-run) — {len(rows)} new game(s) would be appended:")
+                for r in rows[:50]:
+                    print(f"    {r['datetime_utc_minus_03']}  {r['team_1']} vs {r['team_2']}  [{r['stage']}]")
+            else:
+                n = append_fixtures_to_csv(matches_path, rows)
+                print(f"Fixtures: appended {n} new game(s) to {config.matches_csv}.")
+                local = load_matches(matches_path)  # reload so results can map them
+
+        if do_results:
+            results, unmatched = build_results(api_matches, local)
+            print(f"Results: {len(results)} finished game(s) matched to local match_ids.")
+            if unmatched:
+                print(f"  {len(unmatched)} finished API game(s) could NOT be matched "
+                      "(name mismatch or not in your CSV):")
+                for a in unmatched[:25]:
+                    print(f"    {a['home']} {a['home_score']}-{a['away_score']} {a['away']} [{a['stage']}]")
+                print("  -> add an alias in fetch.py _ALIASES or the game to the matches CSV.")
+            if args.dry_run:
+                print("Results (dry-run): nothing written.")
+            else:
+                db = Database(cfg.ROOT / config.database_path)
+                try:
+                    for r in results:
+                        db.upsert_result(r)
+                    total = db.count_results()
+                finally:
+                    db.close()
+                print(f"  ingested; match_results now has {total} rows.")
+
+        if not args.dry_run and not args.no_export:
+            path = export_workbook(config)
+            print(f"Workbook written: {path}")
         return 0
 
     if command == "add-results":

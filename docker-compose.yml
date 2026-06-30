@@ -1,0 +1,47 @@
+# Coolify deployment (Docker Compose).
+#
+# Runs the FIFA forecast collector as a WEB SERVICE: a FastAPI dashboard on port
+# 8000 (view stats/report/results, download the Excel, trigger run/fetch/report)
+# backed by a persistent volume for the dataset. Coolify maps your domain to
+# port 8000 and uses /health for health checks. Coolify "Scheduled Tasks" can
+# still exec the CLI inside the same container, e.g.:
+#
+#   python -m fifa_forecast fetch --results          # ingest finished scores
+#   python -m fifa_forecast run --date 2026-06-27     # collect forecasts for a day
+#
+# Set the secrets as environment variables in the Coolify UI (NOT in git). The
+# ${...} placeholders below are filled by Coolify's environment.
+
+services:
+  fifa-forecast:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    expose:
+      - "8000"
+    environment:
+      # Dataset location (persistent volume). Usually leave as-is.
+      FIFA_DATA_DIR: /data
+      FIFA_DATABASE_PATH: /data/fifa_forecasts.db
+      FIFA_MATCHES_CSV: /data/matches.csv
+      # Dashboard auth — set a password to enable the run/fetch buttons.
+      DASHBOARD_USER: ${DASHBOARD_USER:-admin}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD}
+      # Provider credentials — define these in the Coolify UI.
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      XAI_API_KEY: ${XAI_API_KEY}
+      FOOTBALL_DATA_API_KEY: ${FOOTBALL_DATA_API_KEY}
+    volumes:
+      - fifa-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  fifa-data:
