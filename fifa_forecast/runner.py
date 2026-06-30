@@ -117,6 +117,9 @@ class ExperimentRunner:
         limit_matches: int | None = None,
         dates: list[str] | None = None,
         match_ids: list[str] | None = None,
+        moments: list[str] | None = None,
+        model_keys: list[str] | None = None,
+        reps: int | None = None,
     ) -> dict[str, int]:
         matches = load_matches(cfg.ROOT / self.config.matches_csv)
         matches = filter_matches(matches, dates=dates, match_ids=match_ids)
@@ -130,23 +133,40 @@ class ExperimentRunner:
             )
             return dict(self.stats)
 
-        models = self.config.enabled_models()
-        total_planned = self.plan_size(matches)
+        eff_moments = list(moments) if moments else list(self.config.match_moments)
+        wanted = set(model_keys) if model_keys else None
+        eff_models = [
+            m for m in self.config.enabled_models()
+            if wanted is None or m["key"] in wanted
+        ]
+        eff_reps = reps if reps is not None else self.config.runs_per_combination
+        if not eff_models:
+            self.progress("No models selected (check --model). Nothing to do.")
+            return dict(self.stats)
+
+        total_planned = (
+            len(matches)
+            * len(self.config.team_order_types)
+            * len(eff_moments)
+            * len(eff_models)
+            * len(self.config.prompt_ids)
+            * eff_reps
+        )
         self.progress(
             f"Planned executions: {total_planned} "
             f"({len(matches)} matches x {len(self.config.team_order_types)} orders "
-            f"x {len(self.config.match_moments)} moments "
-            f"x {len(models)} models x {len(self.config.prompt_ids)} prompts "
-            f"x {self.config.runs_per_combination} reps)"
+            f"x {len(eff_moments)} moments "
+            f"x {len(eff_models)} models x {len(self.config.prompt_ids)} prompts "
+            f"x {eff_reps} reps)"
         )
 
         done = 0
         for match in matches:
-            for moment in self.config.match_moments:
+            for moment in eff_moments:
                 for order in self.config.team_order_types:
-                    for model_config in models:
+                    for model_config in eff_models:
                         for prompt_id in self.config.prompt_ids:
-                            for rep in range(1, self.config.runs_per_combination + 1):
+                            for rep in range(1, eff_reps + 1):
                                 done += 1
                                 detail = self._execute_one(
                                     match, order, moment, model_config, prompt_id, rep

@@ -206,6 +206,102 @@ def write_evaluation_excel(ev: Evaluation, output_path: str | Path | None = None
     return target
 
 
+def per_match_comparison(config: cfg.Config, match_id: str) -> dict[str, Any]:
+    """For one match: each (model, prompt, moment)'s modal prediction vs actual.
+
+    Returns a JSON-friendly dict: ``{"info": {...}, "rows": [...]}``. Works whether
+    or not the match has a result yet (actual fields are null until finished).
+    """
+    from collections import Counter
+
+    path = cfg.ROOT / config.database_path
+    info: dict[str, Any] = {"match_id": match_id}
+    if not path.exists():
+        return {"info": info, "rows": []}
+    con = sqlite3.connect(path)
+    try:
+        preds = pd.read_sql_query(
+            "SELECT * FROM forecast_runs WHERE match_id=? AND execution_status='success' "
+            "AND json_valid=1",
+            con,
+            params=(match_id,),
+        )
+        try:
+            res = pd.read_sql_query(
+                "SELECT * FROM match_results WHERE match_id=?", con, params=(match_id,)
+            )
+        except Exception:
+            res = pd.DataFrame()
+    finally:
+        con.close()
+
+    actual_winner = None
+    actual_score = None
+    if not res.empty:
+        r = res.iloc[0]
+        info["team_1"] = r.get("team_1")
+        info["team_2"] = r.get("team_2")
+        info["status"] = r.get("status")
+        a1, a2 = r.get("actual_score_team_1"), r.get("actual_score_team_2")
+        if pd.notna(a1) and pd.notna(a2):
+            actual_score = f"{int(a1)}-{int(a2)}"
+            actual_winner = r.get("actual_winner")
+            info["actual_score"] = actual_score
+            info["actual_winner"] = actual_winner
+
+    if preds.empty:
+        return {"info": info, "rows": []}
+
+    info.setdefault("team_1", preds.iloc[0]["team_1"])
+    info.setdefault("team_2", preds.iloc[0]["team_2"])
+
+    reversed_mask = preds.get("team_order_type", "original") == "reversed"
+    s1 = pd.to_numeric(preds["parsed_score_team_1"], errors="coerce")
+    s2 = pd.to_numeric(preds["parsed_score_team_2"], errors="coerce")
+    preds = preds.assign(
+        c1=np.where(reversed_mask, s2, s1), c2=np.where(reversed_mask, s1, s2)
+    )
+    if "match_moment" not in preds.columns:
+        preds["match_moment"] = None
+
+    rows: list[dict[str, Any]] = []
+    for (model, prompt_id, moment), g in preds.groupby(
+        ["model", "prompt_id", "match_moment"], dropna=False
+    ):
+        pairs = [
+            (int(a), int(b))
+            for a, b in zip(g["c1"], g["c2"])
+            if pd.notna(a) and pd.notna(b)
+        ]
+        if not pairs:
+            continue
+        scores = [f"{a}-{b}" for a, b in pairs]
+        winners = ["team_1" if a > b else "team_2" if a < b else "draw" for a, b in pairs]
+        modal_score, modal_score_n = Counter(scores).most_common(1)[0]
+        modal_winner, modal_winner_n = Counter(winners).most_common(1)[0]
+        rows.append(
+            {
+                "model": model,
+                "prompt_id": prompt_id,
+                "moment": moment,
+                "reps": len(pairs),
+                "modal_score": modal_score,
+                "score_agreement": round(modal_score_n / len(pairs), 2),
+                "modal_winner": modal_winner,
+                "winner_agreement": round(modal_winner_n / len(pairs), 2),
+                "mean_score": f"{g['c1'].mean():.1f}-{g['c2'].mean():.1f}",
+                "outcome_correct": (
+                    None if actual_winner is None else int(modal_winner == actual_winner)
+                ),
+                "exact_correct": (
+                    None if actual_score is None else int(modal_score == actual_score)
+                ),
+            }
+        )
+    rows.sort(key=lambda r: (r["model"], r["prompt_id"], str(r["moment"])))
+    return {"info": info, "rows": rows}
+
+
 def _fmt(df: pd.DataFrame) -> str:
     if df is None or df.empty:
         return "  (no data)"

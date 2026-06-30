@@ -230,9 +230,18 @@ python -m fifa_forecast run  --date 2026-06-22 --date 2026-06-23   # two days
 python -m fifa_forecast run  --match-id 1 --match-id 2   # specific matches
 ```
 
-Useful flags for `run`: `--date YYYY-MM-DD`, `--match-id ID`,
-`--limit-matches N`, `--overwrite`, `--no-export`, `--config path/to/config.json`.
-(`python run.py ...` works the same as `python -m fifa_forecast ...`.)
+Pick exactly what to run — one match, specific moments, specific models, a
+different repetition count (also exposed in the dashboard's **Run** tab):
+
+```bash
+python -m fifa_forecast run --match-id 7 --model claude-opus --model grok \
+    --moment pre_match --reps 5
+```
+
+Useful flags for `run`: `--match-id ID`, `--moment {pre_match,halftime,post_match}`,
+`--model KEY`, `--reps N`, `--date YYYY-MM-DD`, `--limit-matches N`,
+`--overwrite`, `--no-export`, `--config path/to/config.json` (the moment/model
+flags are repeatable). (`python run.py ...` == `python -m fifa_forecast ...`.)
 
 **Resume is automatic.** Run ids are deterministic in the combination, so a
 re-run skips combinations already in the database and never overwrites existing

@@ -155,6 +155,9 @@ assert [f.name for f in fields(RunRecord)] == _COLUMN_NAMES, (
 class Database:
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = Path(db_path)
+        # Ensure the parent directory exists (e.g. a fresh volume / custom path).
+        if self.db_path.parent and not self.db_path.parent.exists():
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(self.db_path)
         self.conn.row_factory = sqlite3.Row
         self._init_schema()

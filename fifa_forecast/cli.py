@@ -83,6 +83,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="Only these match ids. Repeatable.",
     )
     p_run.add_argument(
+        "--moment",
+        action="append",
+        default=None,
+        choices=["pre_match", "halftime", "post_match"],
+        help="Forecast moment(s) to run. Repeatable. Default: config match_moments.",
+    )
+    p_run.add_argument(
+        "--model",
+        action="append",
+        default=None,
+        help="Model key(s) to run, e.g. claude-opus. Repeatable. Default: all enabled.",
+    )
+    p_run.add_argument(
+        "--reps",
+        type=int,
+        default=None,
+        help="Repetitions per combination (default: config runs_per_combination).",
+    )
+    p_run.add_argument(
         "--no-export",
         action="store_true",
         help="Skip building the Excel workbook after the run.",
@@ -418,6 +437,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             limit_matches=args.limit_matches,
             dates=args.date,
             match_ids=args.match_id,
+            moments=args.moment,
+            model_keys=args.model,
+            reps=args.reps,
         )
     finally:
         runner.close()
