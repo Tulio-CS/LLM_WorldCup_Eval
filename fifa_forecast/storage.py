@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from . import config as cfg
+from .results import RESULT_COLUMN_NAMES, RESULT_COLUMNS, MatchResult
 
 
 # Column name -> SQLite type. The dataclass below mirrors these names exactly.
@@ -164,6 +165,10 @@ class Database:
                 f"CREATE INDEX IF NOT EXISTS idx_forecast_{col} "
                 f"ON forecast_runs ({col})"
             )
+        results_cols = ",\n  ".join(f"{name} {ctype}" for name, ctype in RESULT_COLUMNS)
+        self.conn.execute(
+            f"CREATE TABLE IF NOT EXISTS match_results (\n  {results_cols}\n)"
+        )
         self.conn.commit()
 
     def insert_run(self, record: RunRecord) -> None:
@@ -184,6 +189,24 @@ class Database:
 
     def fetch_all(self) -> list[dict[str, Any]]:
         rows = self.conn.execute("SELECT * FROM forecast_runs").fetchall()
+        return [dict(row) for row in rows]
+
+    # -- results ------------------------------------------------------------
+    def upsert_result(self, result: MatchResult) -> None:
+        values = [getattr(result, name) for name in RESULT_COLUMN_NAMES]
+        placeholders = ", ".join("?" for _ in RESULT_COLUMN_NAMES)
+        columns = ", ".join(RESULT_COLUMN_NAMES)
+        self.conn.execute(
+            f"INSERT OR REPLACE INTO match_results ({columns}) VALUES ({placeholders})",
+            values,
+        )
+        self.conn.commit()
+
+    def count_results(self) -> int:
+        return int(self.conn.execute("SELECT COUNT(*) FROM match_results").fetchone()[0])
+
+    def fetch_results(self) -> list[dict[str, Any]]:
+        rows = self.conn.execute("SELECT * FROM match_results").fetchall()
         return [dict(row) for row in rows]
 
     def close(self) -> None:

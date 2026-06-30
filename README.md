@@ -115,7 +115,77 @@ python -m fifa_forecast export
 
 # Write the reproducibility manifest only:
 python -m fifa_forecast manifest
+
+# Analyze what's collected so far (read-only; works on a partial/interrupted run):
+python -m fifa_forecast report
+
+# Project USD cost from observed token usage (e.g. 62 matches, 3 forecasts each):
+python -m fifa_forecast estimate --matches 62 --occasions 3
 ```
+
+### Cost estimation
+
+`estimate` projects spend by combining the **observed** average token usage per
+model × prompt (from `fifa_forecasts.db`) with the per-token `pricing` in
+[config.py](fifa_forecast/config.py) and the planned grid size:
+
+```
+calls = orderings × reps × occasions × matches
+```
+
+`--occasions` is how many times each match is forecast (e.g. 3 = 1 pre-match +
+2 in-play). Anthropic prices are authoritative; **OpenAI / Gemini / xAI prices
+in config are estimates — verify them** before quoting totals. Tune with
+`--reps`, `--orders`, `--occasions`, `--matches`.
+
+### Adding next-phase matches and actual results
+
+**Next-phase fixtures:** append the new games as rows to the matches CSV (same
+format — `team_1,team_2,stage[,datetime_utc_minus_03]`). `match_id` is assigned
+by row order, so appending keeps existing ids stable. Then `run` (it resumes,
+skipping completed combinations). Point `matches_csv` at a different file via
+`config.json` if you prefer to keep phases in separate files.
+
+**Actual results (ground truth):** stored in a separate `match_results` table
+and joined back to predictions by `match_id` — predictions are never mixed with
+outcomes. Workflow:
+
+```bash
+python -m fifa_forecast results-template --out results.csv   # blank row per match
+# fill actual_score_team_1 / actual_score_team_2 (status auto-set to "finished")
+python -m fifa_forecast add-results --csv results.csv        # ingest + refresh Excel
+```
+
+`add-results` upserts by `match_id` (safe to re-run as games finish). The Excel
+workbook gains a **Results** sheet and an **Eval Base** sheet — every prediction
+left-joined to its actual score and `actual_winner` (`team_1`/`team_2`/`draw`,
+canonical order), ready for accuracy/Brier/calibration analysis later.
+
+### Quality & variability report
+
+`report` reads the existing `fifa_forecasts.db` (no API calls) and answers:
+
+- **Counts & errors** — totals, per-model/prompt success vs error, error
+  signatures (e.g. provider 429/529) grouped and counted.
+- **Prompt quality** — per (model, prompt): JSON-validity rate, probabilities
+  summing to 100, all six hats present and ≥30 words, avg tokens/latency.
+- **Variability & convergence** — per model, the within-combination spread of
+  goal difference and win probability across repetitions, winner-agreement, and
+  **how many repetitions are needed before the estimate stops moving**.
+
+Repetition recommendation: a *combination* is `model × match × prompt ×
+team-ordering`; its repetitions are the samples. `recommended_reps` is the CI
+formula `n = (1.96·σ/margin)²` (σ = median within-combination std), with an
+empirical convergence curve as corroboration. Tune the targets:
+
+```bash
+python -m fifa_forecast report --prob-margin 5 --gd-margin 0.3 --shuffles 40
+python -m fifa_forecast report --no-excel        # console only
+```
+
+Output: console digest + `data/exports/FIFA_Quality_Variability_Report.xlsx`
+(sheets: Overview, By Model, By Prompt, Prompt Quality, Errors, Variability by
+Model, Combination Stats, Recommended Reps, Convergence curves).
 
 Run only selected matches by **date** (the local UTC-3 date shown in the CSV)
 or by **match id** — both repeatable and available on `info` too:

@@ -61,8 +61,11 @@ EXCEL_FILENAME = "FIFA_World_Cup_2026_AI_Forecasts.xlsx"
 #   params    : provider-specific request parameters. Whatever is present here
 #               is sent on the wire AND recorded in the dataset. Omit a param
 #               (e.g. temperature) when the provider/model rejects it.
-#   pricing   : USD per 1,000,000 tokens, used to compute api_cost. Leave null
-#               when unknown — api_cost will then be stored as NULL.
+#   pricing   : USD per 1,000,000 tokens {input, output}, used for api_cost and
+#               the `estimate` command. Anthropic prices are authoritative; the
+#               OpenAI/Gemini/xAI values below are BEST-EFFORT ESTIMATES — verify
+#               them against each provider's current pricing page. Set to null to
+#               store api_cost as NULL for that model.
 #
 # Notes on parameters:
 #   * Anthropic Opus 4.8 / Sonnet 4.6 REJECT temperature/top_p — do not add them.
@@ -78,7 +81,7 @@ DEFAULT_MODELS: list[dict[str, Any]] = [
         "enabled": True,
         "api_key_env": "OPENAI_API_KEY",
         "params": {"reasoning_effort": "medium", "max_output_tokens": 8000},
-        "pricing": None,
+        "pricing": {"input": 1.25, "output": 10.0},  # ESTIMATE — verify
     },
     {
         "key": "gpt-5-mini",
@@ -87,7 +90,7 @@ DEFAULT_MODELS: list[dict[str, Any]] = [
         "enabled": True,
         "api_key_env": "OPENAI_API_KEY",
         "params": {"reasoning_effort": "medium", "max_output_tokens": 8000},
-        "pricing": None,
+        "pricing": {"input": 0.25, "output": 2.0},  # ESTIMATE — verify
     },
     {
         "key": "gpt-5-nano",
@@ -96,7 +99,7 @@ DEFAULT_MODELS: list[dict[str, Any]] = [
         "enabled": True,
         "api_key_env": "OPENAI_API_KEY",
         "params": {"reasoning_effort": "medium", "max_output_tokens": 8000},
-        "pricing": None,
+        "pricing": {"input": 0.05, "output": 0.40},  # ESTIMATE — verify
     },
     # ---- Anthropic --------------------------------------------------------
     {
@@ -126,7 +129,7 @@ DEFAULT_MODELS: list[dict[str, Any]] = [
         "enabled": True,
         "api_key_env": "GEMINI_API_KEY",
         "params": {"temperature": 1.0, "top_p": 0.95, "max_output_tokens": 8000},
-        "pricing": None,
+        "pricing": {"input": 1.25, "output": 10.0},  # ESTIMATE — verify
     },
     {
         "key": "gemini-2.5-flash",
@@ -135,7 +138,7 @@ DEFAULT_MODELS: list[dict[str, Any]] = [
         "enabled": True,
         "api_key_env": "GEMINI_API_KEY",
         "params": {"temperature": 1.0, "top_p": 0.95, "max_output_tokens": 8000},
-        "pricing": None,
+        "pricing": {"input": 0.30, "output": 2.50},  # ESTIMATE — verify
     },
     # ---- xAI Grok (OpenAI-compatible API) ---------------------------------
     {
@@ -146,7 +149,7 @@ DEFAULT_MODELS: list[dict[str, Any]] = [
         "api_key_env": "XAI_API_KEY",
         "base_url": "https://api.x.ai/v1",
         "params": {"temperature": 1.0, "top_p": 1.0, "max_tokens": 8000},
-        "pricing": None,
+        "pricing": {"input": 3.0, "output": 15.0},  # ESTIMATE — verify
     },
 ]
 

@@ -15,9 +15,13 @@ from typing import Sequence
 
 from . import config as cfg
 from . import manifest as manifest_mod
+from .analysis import ReportOptions, build_report, print_report, write_report_excel
+from .cost import estimate_cost, print_estimate
 from .export import export_workbook
 from .matches import filter_matches, load_matches
+from .results import load_results_csv, write_results_template
 from .runner import ExperimentRunner
+from .storage import Database
 
 
 def _progress(msg: str) -> None:
@@ -83,6 +87,84 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common(p_manifest)
     p_manifest.add_argument("--dry-run", action="store_true")
 
+    p_report = sub.add_parser(
+        "report",
+        help="Summarize counts, errors, prompt quality and repetition variability "
+        "from the collected data (read-only; works on a partial run).",
+    )
+    _add_common(p_report)
+    p_report.add_argument(
+        "--out", default=None, help="Output .xlsx path (default under data/exports/)."
+    )
+    p_report.add_argument(
+        "--prob-margin",
+        type=float,
+        default=5.0,
+        help="Acceptable +/- on win probability, in points (default 5).",
+    )
+    p_report.add_argument(
+        "--gd-margin",
+        type=float,
+        default=0.3,
+        help="Acceptable +/- on goal difference, in goals (default 0.3).",
+    )
+    p_report.add_argument(
+        "--shuffles",
+        type=int,
+        default=40,
+        help="Permutations per combination for the convergence curve (default 40).",
+    )
+    p_report.add_argument(
+        "--no-excel", action="store_true", help="Print to console only; skip the .xlsx."
+    )
+
+    p_est = sub.add_parser(
+        "estimate",
+        help="Project USD cost from observed token usage for a planned run.",
+    )
+    _add_common(p_est)
+    p_est.add_argument(
+        "--matches",
+        type=int,
+        default=None,
+        help="Number of matches (default: count in the matches CSV).",
+    )
+    p_est.add_argument(
+        "--occasions",
+        type=int,
+        default=1,
+        help="Forecasts per match, e.g. 3 = 1 pre-match + 2 in-play (default 1).",
+    )
+    p_est.add_argument(
+        "--reps",
+        type=int,
+        default=None,
+        help="Repetitions per combination (default: config runs_per_combination).",
+    )
+    p_est.add_argument(
+        "--orders",
+        type=int,
+        default=None,
+        help="Team orderings per match (default: config, normally 2).",
+    )
+
+    p_tmpl = sub.add_parser(
+        "results-template",
+        help="Write a blank results CSV (one row per match) for manual entry.",
+    )
+    _add_common(p_tmpl)
+    p_tmpl.add_argument("--out", default="results.csv", help="Output CSV path.")
+
+    p_addres = sub.add_parser(
+        "add-results",
+        help="Ingest actual match results from a CSV into the match_results table.",
+    )
+    _add_common(p_addres)
+    p_addres.add_argument("--csv", required=True, help="Results CSV to ingest.")
+    p_addres.add_argument(
+        "--no-export", action="store_true", help="Skip rebuilding the Excel workbook."
+    )
+
     p_info = sub.add_parser("info", help="Print the planned execution count.")
     _add_common(p_info)
     p_info.add_argument(
@@ -141,6 +223,61 @@ def main(argv: Sequence[str] | None = None) -> int:
     if command == "export":
         path = export_workbook(config)
         print(f"Workbook written: {path}")
+        return 0
+
+    if command == "results-template":
+        out, n = write_results_template(cfg.ROOT / config.matches_csv, args.out)
+        print(f"Wrote template with {n} matches: {out}")
+        print("Fill in actual_score_team_1 / actual_score_team_2, then run: "
+              "python -m fifa_forecast add-results --csv " + str(args.out))
+        return 0
+
+    if command == "add-results":
+        results, warnings = load_results_csv(args.csv, cfg.ROOT / config.matches_csv)
+        db = Database(cfg.ROOT / config.database_path)
+        try:
+            ingested = 0
+            for r in results:
+                db.upsert_result(r)
+                ingested += 1
+            total = db.count_results()
+        finally:
+            db.close()
+        finished = sum(1 for r in results if r.status == "finished")
+        for w in warnings:
+            print(f"  warning: {w}")
+        print(f"Ingested {ingested} result rows ({finished} finished); "
+              f"match_results now has {total} rows.")
+        if not args.no_export:
+            path = export_workbook(config)
+            print(f"Workbook written: {path}")
+        return 0
+
+    if command == "estimate":
+        matches = args.matches
+        if matches is None:
+            matches = len(load_matches(cfg.ROOT / config.matches_csv))
+        est = estimate_cost(
+            config,
+            matches=matches,
+            occasions=args.occasions,
+            reps=args.reps,
+            orders=args.orders,
+        )
+        print_estimate(est)
+        return 0
+
+    if command == "report":
+        opts = ReportOptions(
+            prob_margin=args.prob_margin,
+            gd_margin=args.gd_margin,
+            shuffles=args.shuffles,
+        )
+        report = build_report(config, opts)
+        print_report(report)
+        if not args.no_excel:
+            path = write_report_excel(report, args.out)
+            print(f"\nReport workbook written: {path}")
         return 0
 
     if command == "manifest":

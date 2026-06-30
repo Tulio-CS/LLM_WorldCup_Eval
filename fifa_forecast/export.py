@@ -45,6 +45,44 @@ def _load_forecasts(db_path: Path) -> pd.DataFrame:
         conn.close()
 
 
+def _load_results(db_path: Path) -> pd.DataFrame:
+    conn = sqlite3.connect(db_path)
+    try:
+        names = [r[1] for r in conn.execute("PRAGMA table_info(match_results)").fetchall()]
+        if not names:
+            return pd.DataFrame()
+        return pd.read_sql_query("SELECT * FROM match_results", conn)
+    finally:
+        conn.close()
+
+
+def _eval_base(forecasts: pd.DataFrame, results: pd.DataFrame) -> pd.DataFrame:
+    """Each prediction left-joined to the actual outcome (eval-ready, no metrics)."""
+    pred_cols = [
+        c
+        for c in (
+            "run_id", "match_id", "phase", "team_1", "team_2", "team_order_type",
+            "prompt_team_1", "prompt_team_2", "provider", "model", "prompt_id",
+            "repetition_number", "parsed_score_team_1", "parsed_score_team_2",
+            "parsed_team1_win_probability", "parsed_draw_probability",
+            "parsed_team2_win_probability", "json_valid", "execution_status",
+        )
+        if c in forecasts.columns
+    ]
+    if forecasts.empty:
+        return pd.DataFrame(columns=pred_cols)
+    base = forecasts[pred_cols].copy()
+    if results.empty:
+        for c in ("actual_score_team_1", "actual_score_team_2", "actual_winner", "result_status"):
+            base[c] = None
+        return base
+    res = results[
+        [c for c in ("match_id", "actual_score_team_1", "actual_score_team_2",
+                     "actual_winner", "status") if c in results.columns]
+    ].rename(columns={"status": "result_status"})
+    return base.merge(res, on="match_id", how="left")
+
+
 def _models_df(config: cfg.Config) -> pd.DataFrame:
     rows = []
     for m in config.models:
@@ -149,6 +187,9 @@ def export_workbook(config: cfg.Config, output_path: str | Path | None = None) -
                      "error_message", "request_timestamp_utc"]
         )
 
+    results_df = _load_results(db_path)
+    eval_base_df = _eval_base(forecasts, results_df)
+
     target = Path(output_path) if output_path else (cfg.EXPORTS_DIR / cfg.EXCEL_FILENAME)
     target.parent.mkdir(parents=True, exist_ok=True)
 
@@ -157,6 +198,8 @@ def export_workbook(config: cfg.Config, output_path: str | Path | None = None) -
         "Matches": _matches_df(config),
         "Models": _models_df(config),
         "Prompts": _prompts_df(),
+        "Results": results_df,
+        "Eval Base": eval_base_df,
         "Raw Responses": raw_df,
         "API Metadata": meta_df,
         "Errors": errors_df,
