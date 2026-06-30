@@ -17,6 +17,7 @@ from . import config as cfg
 from . import manifest as manifest_mod
 from .analysis import ReportOptions, build_report, print_report, write_report_excel
 from .cost import estimate_cost, print_estimate
+from .evaluation import build_evaluation, print_evaluation, write_evaluation_excel
 from .export import export_workbook
 from .fetch import (
     build_new_fixtures,
@@ -122,6 +123,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Permutations per combination for the convergence curve (default 40).",
     )
     p_report.add_argument(
+        "--no-excel", action="store_true", help="Print to console only; skip the .xlsx."
+    )
+
+    p_eval = sub.add_parser(
+        "evaluate",
+        help="Compare AI forecasts to actual results for finished matches "
+        "(accuracy, exact score, Brier).",
+    )
+    _add_common(p_eval)
+    p_eval.add_argument(
+        "--out", default=None, help="Output .xlsx path (default under data/exports/)."
+    )
+    p_eval.add_argument(
         "--no-excel", action="store_true", help="Print to console only; skip the .xlsx."
     )
 
@@ -233,6 +247,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         total = (
             len(matches)
             * len(config.team_order_types)
+            * len(config.match_moments)
             * len(config.enabled_models())
             * len(config.prompt_ids)
             * config.runs_per_combination
@@ -250,6 +265,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Enabled models:        {len(config.enabled_models())}")
         print(f"Prompt strategies:     {len(config.prompt_ids)}")
         print(f"Team orderings:        {len(config.team_order_types)}")
+        print(f"Match moments:         {len(config.match_moments)} ({', '.join(config.match_moments)})")
         print(f"Repetitions/combo:     {config.runs_per_combination}")
         print(f"Planned executions:    {total}")
         return 0
@@ -363,6 +379,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not args.no_excel:
             path = write_report_excel(report, args.out)
             print(f"\nReport workbook written: {path}")
+        return 0
+
+    if command == "evaluate":
+        ev = build_evaluation(config)
+        print_evaluation(ev)
+        if not args.no_excel and ev.tables:
+            path = write_evaluation_excel(ev, args.out)
+            print(f"\nEvaluation workbook written: {path}")
         return 0
 
     if command == "manifest":

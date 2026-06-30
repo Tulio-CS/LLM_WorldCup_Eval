@@ -49,7 +49,7 @@ FOOTBALL_DATA_API_KEY=...                        # only if you use fetch
 > read-only** and the money-spending endpoints are disabled — so a public URL
 > can never trigger paid API calls by accident. `/health` is always open.
 
-Leave `FIFA_DATA_DIR` / `FIFA_DATABASE_PATH` / `FIFA_MATCHES_CSV` as set in the
+Leave `FIFA_DATA_DIR` / `FIFA_DB_PATH` / `FIFA_MATCHES_CSV` as set in the
 compose file.
 
 ## 4. Persistent storage

@@ -303,10 +303,14 @@ def _render_home() -> str:
     downloads = """
     <h2>Downloads & views</h2>
     <p>
-      <a href='./download/forecasts'>⬇ Forecasts workbook (.xlsx)</a> &nbsp;·&nbsp;
-      <a href='./download/report'>⬇ Quality/variability report (.xlsx)</a> &nbsp;·&nbsp;
+      <a href='./evaluate'>🎯 Forecast vs results (web)</a> &nbsp;·&nbsp;
       <a href='./report'>📊 Report (web)</a> &nbsp;·&nbsp;
       <a href='./results'>⚽ Results (web)</a>
+    </p>
+    <p>
+      <a href='./download/forecasts'>⬇ Forecasts (.xlsx)</a> &nbsp;·&nbsp;
+      <a href='./download/report'>⬇ Report (.xlsx)</a> &nbsp;·&nbsp;
+      <a href='./download/evaluation'>⬇ Evaluation (.xlsx)</a>
     </p>
     """
 
@@ -384,6 +388,46 @@ def results_page(_: None = Depends(require_view)) -> HTMLResponse:
         con.close()
     table = df.to_html(index=False, border=0) if not df.empty else "<p>No results ingested yet.</p>"
     return HTMLResponse(_page("<h1>Match results</h1><p><a href='./'>← back</a></p>" + table))
+
+
+@app.get("/evaluate", response_class=HTMLResponse)
+def evaluate_page(_: None = Depends(require_view)) -> HTMLResponse:
+    from .evaluation import build_evaluation
+
+    config = cfg.load_config()
+    try:
+        ev = build_evaluation(config)
+    except FileNotFoundError:
+        return HTMLResponse(_page("<h1>Forecast vs results</h1><p>No database yet.</p>"))
+    if not ev.tables:
+        notes = "".join(f"<p>{html.escape(n)}</p>" for n in ev.notes)
+        return HTMLResponse(
+            _page("<h1>Forecast vs results</h1><p><a href='./'>← back</a></p>" + notes)
+        )
+    blocks = []
+    for name in ["Leaderboard (by model)", "By Model & Prompt", "By Moment", "By Match"]:
+        df = ev.tables.get(name)
+        if df is None or df.empty:
+            continue
+        blocks.append(f"<h2>{html.escape(name)}</h2>" + df.to_html(index=False, border=0))
+    notes = "".join(f"<li>{html.escape(n)}</li>" for n in ev.notes)
+    return HTMLResponse(
+        _page(
+            "<h1>AI forecast vs actual results</h1><p><a href='./'>← back</a></p>"
+            + "".join(blocks)
+            + (f"<h2>Notes</h2><ul>{notes}</ul>" if notes else "")
+        )
+    )
+
+
+@app.get("/download/evaluation")
+def download_evaluation(_: None = Depends(require_view)) -> FileResponse:
+    from .evaluation import build_evaluation, write_evaluation_excel
+
+    config = cfg.load_config()
+    ev = build_evaluation(config)
+    path = write_evaluation_excel(ev)
+    return FileResponse(path, filename=Path(path).name)
 
 
 @app.get("/download/forecasts")

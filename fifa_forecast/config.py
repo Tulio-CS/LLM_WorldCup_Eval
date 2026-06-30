@@ -28,11 +28,14 @@ except Exception:  # pragma: no cover
 # --------------------------------------------------------------------------- #
 # Paths
 # --------------------------------------------------------------------------- #
+# ``FIFA_DATA_DIR`` and ``FIFA_DB_PATH`` let a deployment redirect all generated
+# artifacts (JSON archive + SQLite DB) onto a mounted persistent volume without
+# touching the code — e.g. on Coolify: FIFA_DATA_DIR=/data.
 ROOT = Path(__file__).resolve().parent.parent
-# DATA_DIR holds the SQLite DB archive, raw artifacts and exports. In a container
-# deployment, set FIFA_DATA_DIR to a mounted persistent volume (e.g. /data) so the
-# dataset survives redeploys; locally it defaults to <repo>/data.
-DATA_DIR = Path(os.environ["FIFA_DATA_DIR"]) if os.environ.get("FIFA_DATA_DIR") else (ROOT / "data")
+# DATA_DIR holds the SQLite DB, raw artifacts and exports. Set FIFA_DATA_DIR to a
+# mounted persistent volume (e.g. /data on Coolify) to relocate all generated
+# state without touching code; locally it defaults to <repo>/data.
+DATA_DIR = Path(os.environ.get("FIFA_DATA_DIR") or (ROOT / "data"))
 RAW_REQUESTS_DIR = DATA_DIR / "raw_requests"
 RAW_RESPONSES_DIR = DATA_DIR / "raw_responses"
 TRACES_DIR = DATA_DIR / "traces"
@@ -165,6 +168,12 @@ class Config:
     team_order_types: list[str] = field(
         default_factory=lambda: ["original", "reversed"]
     )
+    # Capture the same match at three points in time: before kickoff, at
+    # half-time, and after the final whistle. The kickoff time + moment are
+    # injected into every prompt (see prompts.render).
+    match_moments: list[str] = field(
+        default_factory=lambda: ["pre_match"]
+    )
     prompt_ids: list[str] = field(
         default_factory=lambda: [
             "simple-prediction",
@@ -177,7 +186,9 @@ class Config:
     request_timeout: int = 120  # seconds
 
     matches_csv: str = "fifa_world_cup_2026_future_matches.csv"
-    database_path: str = "fifa_forecasts.db"
+    database_path: str = field(
+        default_factory=lambda: os.environ.get("FIFA_DB_PATH", "fifa_forecasts.db")
+    )
 
     models: list[dict[str, Any]] = field(default_factory=lambda: list(DEFAULT_MODELS))
 
@@ -215,7 +226,7 @@ def load_config(overrides_path: str | os.PathLike | None = None) -> Config:
 
     # Environment overrides (used by container deployments; take precedence).
     # Absolute paths work directly because `ROOT / "/data/x"` resolves to "/data/x".
-    env_db = os.environ.get("FIFA_DATABASE_PATH")
+    env_db = os.environ.get("FIFA_DB_PATH")
     if env_db:
         cfg.database_path = env_db
     env_matches = os.environ.get("FIFA_MATCHES_CSV")

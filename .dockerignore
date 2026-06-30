@@ -1,20 +1,23 @@
-# Never bake secrets or local state into the image.
+# Keep the image small and free of local state — DB + artifacts live on the volume.
+.git
+.gitignore
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+.ipynb_checkpoints
+
+# Secrets (provided as env vars in Coolify, never baked into the image)
 .env
 .env.*
+
+# Local generated state — recreated on the persistent volume at runtime
 data/
 *.db
 *.db-journal
-experiment_manifest.json
 *.xlsx
-
-# VCS / caches / local tooling
-.git
-.gitignore
-__pycache__/
-*.py[cod]
-.venv/
-venv/
-.ipynb_checkpoints/
+experiment_manifest.json
 config.test.json
 results*.csv
 scratch*

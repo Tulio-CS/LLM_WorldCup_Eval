@@ -4,10 +4,11 @@ openpyxl>=3.1
 python-dotenv>=1.0
 requests>=2.31          # used by the `fetch` command (football-data.org)
 
-# Web dashboard (only needed to serve the Coolify web service; see fifa_forecast/web.py)
-fastapi>=0.110
-uvicorn>=0.29
+# Web dashboard (served as the Coolify web service; see fifa_forecast/web.py)
+fastapi>=0.111
+uvicorn[standard]>=0.29
 python-multipart>=0.0.9   # FastAPI form handling for the dashboard buttons
+sse-starlette>=1.8        # reserved for live job-log streaming
 
 # Provider SDKs (optional — install the ones you need).
 # Without these, the corresponding provider can only run in --dry-run (mock) mode.

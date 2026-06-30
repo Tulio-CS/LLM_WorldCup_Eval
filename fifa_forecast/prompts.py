@@ -10,13 +10,55 @@ system prompt is also provided.
 
 from __future__ import annotations
 
-PROMPT_VERSION = "1.0.0"
+PROMPT_VERSION = "1.1.0"
 
 SYSTEM_PROMPT = (
     "You are an expert football (soccer) analyst forecasting FIFA World Cup "
     "2026 matches. Follow the output format exactly and return only what is "
     "requested."
 )
+
+# --------------------------------------------------------------------------- #
+# Match moments — the same match is forecast at three points in time. The
+# kickoff time and the moment are injected as a context header on top of every
+# prompt so the model knows *when* the forecast is being captured.
+# --------------------------------------------------------------------------- #
+MATCH_MOMENTS = ("pre_match", "halftime", "post_match")
+
+MOMENT_LABELS: dict[str, str] = {
+    "pre_match": "before kickoff, with the match not yet started",
+    "halftime": "during the half-time break, with the match in progress",
+    "post_match": "right after the final whistle, with the match finished",
+}
+
+# Approximate wall-clock offset (in minutes) from kickoff for each moment, used
+# by the planner to show *when* each run is intended to fire:
+#   pre_match  -> a few minutes before kickoff
+#   halftime   -> ~end of the first half / start of the break
+#   post_match -> ~final whistle (90' + stoppage)
+MOMENT_OFFSET_MINUTES: dict[str, int] = {
+    "pre_match": -5,
+    "halftime": 55,
+    "post_match": 115,
+}
+
+
+def context_header(kickoff: str | None, moment: str | None) -> str:
+    """Build the context block prepended to every prompt.
+
+    ``kickoff`` is the scheduled match time (local, UTC-3) and ``moment`` is one
+    of :data:`MATCH_MOMENTS`. Returns "" when neither is provided so the legacy
+    prompt wording is preserved.
+    """
+    lines: list[str] = []
+    if kickoff:
+        lines.append(f"Scheduled kickoff time (local, UTC-3): {kickoff}.")
+    if moment:
+        label = MOMENT_LABELS.get(moment, moment)
+        lines.append(f"You are making this forecast {label}.")
+    if not lines:
+        return ""
+    return "Context:\n" + "\n".join(lines) + "\n\n"
 
 SIMPLE_PREDICTION = """You are forecasting a FIFA World Cup 2026 match.
 
@@ -110,13 +152,26 @@ HAT_FIELDS = (
 )
 
 
-def render(prompt_id: str, team1: str, team2: str) -> str:
-    """Render a prompt template with the team names in presentation order."""
+def render(
+    prompt_id: str,
+    team1: str,
+    team2: str,
+    *,
+    kickoff: str | None = None,
+    moment: str | None = None,
+) -> str:
+    """Render a prompt template with the team names in presentation order.
+
+    When ``kickoff`` and/or ``moment`` are supplied, a context header stating the
+    match time and the forecasting moment is prepended (see
+    :func:`context_header`).
+    """
     try:
         template = PROMPT_TEMPLATES[prompt_id]
     except KeyError as exc:  # pragma: no cover
         raise ValueError(f"Unknown prompt_id: {prompt_id!r}") from exc
-    return template.format(team1=team1, team2=team2)
+    body = template.format(team1=team1, team2=team2)
+    return context_header(kickoff, moment) + body
 
 
 def prompt_catalog() -> list[dict[str, str]]:

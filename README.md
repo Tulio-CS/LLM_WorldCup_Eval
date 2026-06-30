@@ -178,6 +178,22 @@ Games the API reports but can't be matched to your CSV (name mismatch, or not
 present) are listed, never guessed — add an alias in `fetch.py` `_ALIASES` or
 the game to the matches CSV. `--dry-run` writes nothing.
 
+### Comparing forecasts to actual results
+
+Once results are ingested, score the AI against reality for **finished** matches:
+
+```bash
+python -m fifa_forecast evaluate              # console leaderboard + Excel report
+python -m fifa_forecast evaluate --no-excel   # console only
+```
+
+It joins valid predictions to finished results, maps every prediction back to
+canonical team order (so `original`/`reversed` runs are comparable), and reports
+per model / prompt / moment: **outcome accuracy**, **exact-score accuracy**,
+mean goal-difference & total-goals error, and the **3-way Brier score**
+(probability/six-hats prompts). Output: console + `FIFA_Evaluation_Report.xlsx`,
+and the dashboard's **Forecast vs results** page (`/evaluate`).
+
 ### Quality & variability report
 
 `report` reads the existing `fifa_forecasts.db` (no API calls) and answers:

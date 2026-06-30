@@ -1,0 +1,12 @@
+[scheduler] disabled (FIFA_SCHEDULER=0)
+INFO:     127.0.0.1:58569 - "GET /api/dashboard HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54237 - "GET /api/planned?only=all HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55132 - "POST /api/plan/save HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55132 - "GET /api/planned?only=all HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53184 - "POST /api/planned/cancel HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53184 - "POST /api/planned/cancel HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53184 - "GET /api/planned?only=all HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53184 - "POST /api/planned/reactivate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53184 - "GET /api/planned?only=all HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61317 - "POST /api/planned/clear HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61317 - "GET /api/planned?only=all HTTP/1.1" 200 OK
