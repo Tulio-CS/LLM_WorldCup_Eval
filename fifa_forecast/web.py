@@ -317,11 +317,97 @@ def api_compare(match_id: str, _: None = Depends(require_view)) -> JSONResponse:
     return JSONResponse(_jsonable(per_match_comparison(cfg.load_config(), match_id)))
 
 
+_FORECAST_COLS = [
+    "run_id", "match_id", "team_1", "team_2", "provider", "model", "prompt_id",
+    "match_moment", "team_order_type", "repetition_number",
+    "parsed_score_team_1", "parsed_score_team_2",
+    "parsed_team1_win_probability", "parsed_draw_probability", "parsed_team2_win_probability",
+    "json_valid", "execution_status", "latency_ms", "total_tokens", "api_cost",
+]
+
+
+@app.get("/api/forecasts")
+def api_forecasts(
+    match_id: str | None = None, model: str | None = None, prompt_id: str | None = None,
+    moment: str | None = None, order: str | None = None, status: str | None = None,
+    valid: str | None = None, q: str | None = None, limit: int = 50, offset: int = 0,
+    _: None = Depends(require_view),
+) -> JSONResponse:
+    """Filtered, paginated view of the forecast_runs table."""
+    path = _db_path()
+    if not path.exists():
+        return JSONResponse({"total": 0, "rows": [], "limit": limit, "offset": offset})
+    con = sqlite3.connect(path)
+    con.row_factory = sqlite3.Row
+    try:
+        cols = {r[1] for r in con.execute("PRAGMA table_info(forecast_runs)")}
+        where: list[str] = []
+        params: list[Any] = []
+
+        def add(cond: str, val: Any) -> None:
+            where.append(cond)
+            params.append(val)
+
+        if match_id:
+            add("match_id = ?", match_id)
+        if model:
+            add("model = ?", model)
+        if prompt_id:
+            add("prompt_id = ?", prompt_id)
+        if moment and "match_moment" in cols:
+            add("match_moment = ?", moment)
+        if order:
+            add("team_order_type = ?", order)
+        if status:
+            add("execution_status = ?", status)
+        if valid in ("0", "1"):
+            add("json_valid = ?", int(valid))
+        if q:
+            where.append("(team_1 LIKE ? OR team_2 LIKE ? OR model LIKE ? OR prompt_id LIKE ?)")
+            like = f"%{q}%"
+            params += [like, like, like, like]
+        wsql = (" WHERE " + " AND ".join(where)) if where else ""
+
+        total = con.execute(f"SELECT COUNT(*) FROM forecast_runs{wsql}", params).fetchone()[0]
+        sel = [c for c in _FORECAST_COLS if c in cols]
+        lim = max(1, min(int(limit), 500))
+        off = max(0, int(offset))
+        rows = con.execute(
+            f"SELECT {', '.join(sel)} FROM forecast_runs{wsql} "
+            "ORDER BY CAST(match_id AS INTEGER), run_id LIMIT ? OFFSET ?",
+            params + [lim, off],
+        ).fetchall()
+        return JSONResponse(_jsonable({
+            "total": int(total), "limit": lim, "offset": off,
+            "rows": [dict(r) for r in rows],
+        }))
+    finally:
+        con.close()
+
+
+@app.get("/api/forecast/{run_id}")
+def api_forecast_detail(run_id: str, _: None = Depends(require_view)) -> JSONResponse:
+    """Full row (incl. prompt text, raw response, six hats) for one execution."""
+    path = _db_path()
+    if not path.exists():
+        raise HTTPException(404, "no database")
+    con = sqlite3.connect(path)
+    con.row_factory = sqlite3.Row
+    try:
+        r = con.execute("SELECT * FROM forecast_runs WHERE run_id = ?", (run_id,)).fetchone()
+    finally:
+        con.close()
+    if not r:
+        raise HTTPException(404, "not found")
+    return JSONResponse(_jsonable(dict(r)))
+
+
 # --------------------------------------------------------------------------- #
 # Actions (JSON body)
 # --------------------------------------------------------------------------- #
 class RunReq(BaseModel):
-    match_id: str | None = None
+    match_id: str | None = None     # single, kept for backward compatibility
+    match_ids: list[str] = []       # run several matches at once ([] = all)
     moments: list[str] = []
     models: list[str] = []
     reps: int | None = None
@@ -336,8 +422,11 @@ class FetchReq(BaseModel):
 @app.post("/actions/run")
 def action_run(req: RunReq, _: None = Depends(require_action)) -> JSONResponse:
     args = ["run", "--no-export"]
-    if req.match_id:
-        args += ["--match-id", req.match_id]
+    ids = list(req.match_ids)
+    if req.match_id and req.match_id not in ids:
+        ids.append(req.match_id)
+    for mid in ids:
+        args += ["--match-id", mid]
     for m in req.moments:
         if m in prompt_lib.MATCH_MOMENTS:
             args += ["--moment", m]
@@ -472,6 +561,14 @@ tr:hover td{background:#0e1726}
 .toast{position:fixed;right:18px;bottom:18px;background:#0e1726;border:1px solid var(--border2);
   padding:12px 16px;border-radius:10px;max-width:360px;box-shadow:0 8px 30px #0008}
 .section-actions{display:flex;gap:10px;align-items:center;margin-top:10px;flex-wrap:wrap}
+.picklist{max-height:220px;overflow:auto;border:1px solid var(--border2);border-radius:8px;padding:8px;
+  display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:4px}
+.clickrow td{cursor:pointer} .clickrow:hover td{background:#16233b}
+.modal{position:fixed;inset:0;background:#000a;display:flex;align-items:flex-start;justify-content:center;
+  padding:40px 16px;z-index:50;overflow:auto}
+.modalbox{background:var(--panel);border:1px solid var(--border2);border-radius:14px;max-width:860px;width:100%;padding:20px}
+.kv{display:grid;grid-template-columns:170px 1fr;gap:5px 14px;font-size:13px;margin:8px 0}
+.kv .k{color:var(--muted)} .x{float:right;cursor:pointer;color:var(--muted);font-size:18px}
 </style></head>
 <body>
 <div class="top">
@@ -484,6 +581,7 @@ tr:hover td{background:#0e1726}
   <div class="tab" data-tab="run">Run</div>
   <div class="tab" data-tab="results">Results</div>
   <div class="tab" data-tab="compare">Compare</div>
+  <div class="tab" data-tab="forecasts">Forecasts</div>
   <div class="tab" data-tab="downloads">Downloads</div>
 </div>
 <div class="wrap">
@@ -505,13 +603,18 @@ tr:hover td{background:#0e1726}
   <section id="t-run" class="hide">
     <div class="panel">
       <h2>Run a collection</h2>
-      <div class="row">
-        <div><label>Match</label><select id="runMatch"></select></div>
-        <div style="max-width:130px"><label>Repetitions</label><input type="number" id="runReps" min="1" max="50" value="10"></div>
+      <div style="margin-bottom:14px">
+        <label>Matches — check one or many (none = all)</label>
+        <input type="text" id="runMatchSearch" placeholder="filter by team, date or phase…" style="margin-bottom:8px">
+        <div id="runMatchList" class="picklist"></div>
+        <div class="small muted" style="margin-top:6px">
+          <a href="#" id="matchAll">all</a> · <a href="#" id="matchNone">none</a> ·
+          <a href="#" id="matchShown">select shown</a> · <b id="matchCount"></b></div>
       </div>
       <div style="margin-bottom:14px"><label>Moments</label><div class="checkset" id="runMoments"></div></div>
       <div style="margin-bottom:14px"><label>Models</label><div class="checkset" id="runModels"></div>
         <div class="small muted" style="margin-top:6px"><a href="#" id="modelsAll">select all</a> · <a href="#" id="modelsNone">none</a></div></div>
+      <div class="row"><div style="max-width:140px"><label>Repetitions</label><input type="number" id="runReps" min="1" max="50" value="10"></div></div>
       <div class="section-actions">
         <label class="chk"><input type="checkbox" id="runDry"> dry-run (free, mock)</label>
         <button class="btn warn" id="btnRun">▶ Run</button>
@@ -549,6 +652,37 @@ tr:hover td{background:#0e1726}
     </div>
   </section>
 
+  <!-- FORECASTS -->
+  <section id="t-forecasts" class="hide">
+    <div class="panel">
+      <h2>Forecast runs — filterable table</h2>
+      <div class="row">
+        <div><label>Match</label><select id="fxMatch"></select></div>
+        <div><label>Model</label><select id="fxModel"></select></div>
+        <div><label>Prompt</label><select id="fxPrompt"></select></div>
+        <div><label>Moment</label><select id="fxMoment"></select></div>
+      </div>
+      <div class="row">
+        <div><label>Order</label><select id="fxOrder"><option value="">any</option><option>original</option><option>reversed</option></select></div>
+        <div><label>Status</label><select id="fxStatus"><option value="">any</option><option>success</option><option>error</option></select></div>
+        <div><label>JSON</label><select id="fxValid"><option value="">any</option><option value="1">valid</option><option value="0">invalid</option></select></div>
+        <div><label>Search</label><input type="text" id="fxQ" placeholder="team / model…"></div>
+      </div>
+      <div class="section-actions" style="margin-bottom:10px">
+        <button class="btn ghost" id="fxApply">Apply</button>
+        <button class="btn ghost" id="fxReset">Reset</button>
+        <span class="small muted" id="fxCount"></span>
+        <span class="small muted" style="margin-left:auto">click a row → prompt + raw response</span>
+      </div>
+      <div id="fxTable" class="tablewrap"></div>
+      <div class="section-actions">
+        <button class="btn ghost" id="fxPrev">‹ Prev</button>
+        <span class="small muted" id="fxPage"></span>
+        <button class="btn ghost" id="fxNext">Next ›</button>
+      </div>
+    </div>
+  </section>
+
   <!-- DOWNLOADS -->
   <section id="t-downloads" class="hide">
     <div class="panel"><h2>Excel workbooks</h2>
@@ -558,6 +692,7 @@ tr:hover td{background:#0e1726}
     </div>
   </section>
 </div>
+<div id="fxModal" class="modal hide"><div class="modalbox" id="fxModalBox"></div></div>
 <div id="toast" class="toast hide"></div>
 
 <script>
@@ -571,9 +706,10 @@ function toast(msg,ms=3500){const t=$('#toast');t.textContent=msg;t.classList.re
 
 function tab(name){
   $$('.tab').forEach(t=>t.classList.toggle('active',t.dataset.tab===name));
-  ['overview','run','results','compare','downloads'].forEach(n=>$('#t-'+n).classList.toggle('hide',n!==name));
+  ['overview','run','results','compare','forecasts','downloads'].forEach(n=>$('#t-'+n).classList.toggle('hide',n!==name));
   if(name==='results')loadResults();
   if(name==='compare')loadCompare();
+  if(name==='forecasts')loadForecasts();
   if(name==='overview')loadEvaluate();
 }
 $$('.tab').forEach(t=>t.onclick=()=>tab(t.dataset.tab));
@@ -606,9 +742,9 @@ async function boot(){
   $('#roBanner').classList.toggle('hide',BOOT.actions_enabled);
   renderKpis(BOOT.summary); renderOvCards(BOOT.summary);
   buildRunForm();
-  // match dropdowns
+  buildMatchPicker();
+  buildForecastFilters();
   const opt=m=>`<option value="${m.match_id}">${esc(m.label)}${m.finished?' ✓':''}</option>`;
-  $('#runMatch').innerHTML='<option value="">— All matches —</option>'+BOOT.matches.map(opt).join('');
   const withPred=BOOT.matches.filter(m=>m.has_predictions);
   $('#cmpMatch').innerHTML=(withPred.length?withPred:BOOT.matches).map(opt).join('');
   loadEvaluate();
@@ -625,23 +761,27 @@ function buildRunForm(){
   $('#btnRun').disabled=!act;
   $$('[data-fetch]').forEach(b=>b.disabled=!act); $('#btnReport').disabled=!act;
   updateEstimate();
-  $('#runMatch').onchange=$('#runReps').oninput=updateEstimate;
+  $('#runReps').oninput=updateEstimate;
   $('#runModels').onchange=$('#runMoments').onchange=updateEstimate;
 }
 function selModels(){return $$('#runModels input:checked').map(i=>i.value);}
 function selMoments(){return $$('#runMoments input:checked').map(i=>i.value);}
+function selMatches(){return $$('#runMatchList input:checked').map(i=>i.value);}
 function updateEstimate(){
-  const matches=$('#runMatch').value?1:BOOT.matches.length;
+  const c=selMatches().length;
+  const matches=c||BOOT.matches.length;
   const calls=matches*Math.max(selMoments().length,1)*Math.max(selModels().length,1)*BOOT.prompts.length*(+$('#runReps').value||1);
   $('#runEstimate').textContent=`≈ ${calls.toLocaleString()} API calls`;
+  const mc=$('#matchCount'); if(mc)mc.textContent=c?`${c} selected`:'none → all matches';
 }
 $('#modelsAll').onclick=e=>{e.preventDefault();$$('#runModels input').forEach(i=>i.checked=true);updateEstimate();};
 $('#modelsNone').onclick=e=>{e.preventDefault();$$('#runModels input').forEach(i=>i.checked=false);updateEstimate();};
 
 $('#btnRun').onclick=async()=>{
-  const body={match_id:$('#runMatch').value||null,moments:selMoments(),models:selModels(),
+  const body={match_ids:selMatches(),moments:selMoments(),models:selModels(),
     reps:+$('#runReps').value||null,dry_run:$('#runDry').checked};
   if(!body.models.length)return toast('Select at least one model.');
+  if(!body.moments.length)return toast('Select at least one moment.');
   if(!body.dry_run && !confirm('This calls the paid LLM APIs and may cost money. Continue?'))return;
   try{const r=await api('./actions/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     toast(r.ok?('Started: '+r.command):('Busy: '+r.message));startPolling();tab('run');}
@@ -714,6 +854,87 @@ async function loadCompare(){
       {key:'exact_correct',label:'Exact?',render:win}]);
   }catch(e){$('#cmpTable').innerHTML='<p class="muted small" style="padding:10px">'+esc(e.message)+'</p>';}
 }
+
+function buildMatchPicker(){
+  const list=$('#runMatchList');
+  list.innerHTML=BOOT.matches.map(m=>
+    `<label class="chk" style="justify-content:flex-start" data-text="${esc((m.label+' '+(m.phase||'')).toLowerCase())}">
+       <input type="checkbox" value="${esc(m.match_id)}"> ${esc(m.match_id)}. ${esc(m.team_1)} v ${esc(m.team_2)}
+       <span class="muted small">${esc(m.local_date||'')}${m.finished?' ✓':''}</span></label>`).join('');
+  list.onchange=updateEstimate;
+  $('#runMatchSearch').oninput=e=>{const q=e.target.value.toLowerCase();
+    [...list.children].forEach(el=>el.style.display=el.dataset.text.includes(q)?'':'none');};
+  $('#matchAll').onclick=e=>{e.preventDefault();[...list.querySelectorAll('input')].forEach(i=>i.checked=true);updateEstimate();};
+  $('#matchNone').onclick=e=>{e.preventDefault();[...list.querySelectorAll('input')].forEach(i=>i.checked=false);updateEstimate();};
+  $('#matchShown').onclick=e=>{e.preventDefault();[...list.children].forEach(el=>{if(el.style.display!=='none')el.querySelector('input').checked=true;});updateEstimate();};
+  updateEstimate();
+}
+
+let fxOffset=0; const fxLimit=50;
+function buildForecastFilters(){
+  const opts=(arr,fn)=>'<option value="">any</option>'+arr.map(fn).join('');
+  $('#fxMatch').innerHTML=opts(BOOT.matches,m=>`<option value="${esc(m.match_id)}">${esc(m.match_id)}. ${esc(m.team_1)} v ${esc(m.team_2)}</option>`);
+  $('#fxModel').innerHTML=opts(BOOT.models,m=>`<option value="${esc(m.key)}">${esc(m.key)}</option>`);
+  $('#fxPrompt').innerHTML=opts(BOOT.prompts,p=>`<option value="${esc(p)}">${esc(p)}</option>`);
+  $('#fxMoment').innerHTML=opts(BOOT.moments,m=>`<option value="${esc(m)}">${esc(m)}</option>`);
+  $('#fxApply').onclick=()=>{fxOffset=0;loadForecasts();};
+  $('#fxReset').onclick=()=>{['fxMatch','fxModel','fxPrompt','fxMoment','fxOrder','fxStatus','fxValid'].forEach(id=>$('#'+id).value='');$('#fxQ').value='';fxOffset=0;loadForecasts();};
+  $('#fxQ').onkeydown=e=>{if(e.key==='Enter'){fxOffset=0;loadForecasts();}};
+  $('#fxPrev').onclick=()=>{if(fxOffset>0){fxOffset=Math.max(0,fxOffset-fxLimit);loadForecasts();}};
+  $('#fxNext').onclick=()=>{fxOffset+=fxLimit;loadForecasts();};
+}
+function fxQuery(){
+  const p=new URLSearchParams(), g=id=>$('#'+id).value;
+  if(g('fxMatch'))p.set('match_id',g('fxMatch'));
+  if(g('fxModel'))p.set('model',g('fxModel'));
+  if(g('fxPrompt'))p.set('prompt_id',g('fxPrompt'));
+  if(g('fxMoment'))p.set('moment',g('fxMoment'));
+  if(g('fxOrder'))p.set('order',g('fxOrder'));
+  if(g('fxStatus'))p.set('status',g('fxStatus'));
+  if(g('fxValid'))p.set('valid',g('fxValid'));
+  if(g('fxQ'))p.set('q',g('fxQ'));
+  p.set('limit',fxLimit);p.set('offset',fxOffset);
+  return p.toString();
+}
+async function loadForecasts(){
+  try{const d=await api('./api/forecasts?'+fxQuery());
+    const score=r=>(r.parsed_score_team_1!=null&&r.parsed_score_team_2!=null)?`${r.parsed_score_team_1}-${r.parsed_score_team_2}`:'–';
+    const vp=v=>v?'<span class="pill ok">ok</span>':'<span class="pill bad">no</span>';
+    const body=d.rows.map(r=>`<tr class="clickrow" data-id="${esc(r.run_id)}">
+      <td>${esc(r.match_id)}</td><td>${esc(r.team_1)} v ${esc(r.team_2)}</td><td>${esc(r.model)}</td>
+      <td>${esc(r.prompt_id)}</td><td>${esc(r.match_moment||'')}</td><td>${esc(r.team_order_type||'')}</td>
+      <td>${esc(r.repetition_number)}</td><td>${score(r)}</td><td>${vp(r.json_valid)}</td>
+      <td>${esc(r.execution_status)}</td><td>${r.total_tokens==null?'':r.total_tokens}</td></tr>`).join('');
+    $('#fxTable').innerHTML=d.rows.length
+      ? `<table><tr><th>#</th><th>Match</th><th>Model</th><th>Prompt</th><th>Moment</th><th>Order</th><th>Rep</th><th>Score</th><th>JSON</th><th>Status</th><th>Tok</th></tr>${body}</table>`
+      : '<p class="muted small" style="padding:10px">No rows match these filters.</p>';
+    $('#fxCount').textContent=`${d.total.toLocaleString()} rows`;
+    $('#fxPage').textContent=d.total?`${d.offset+1}–${Math.min(d.offset+d.limit,d.total)} of ${d.total}`:'0';
+    $('#fxPrev').disabled=d.offset<=0; $('#fxNext').disabled=d.offset+d.limit>=d.total;
+    $$('#fxTable .clickrow').forEach(tr=>tr.onclick=()=>openDetail(tr.dataset.id));
+  }catch(e){$('#fxTable').innerHTML='<p class="muted small" style="padding:10px">'+esc(e.message)+'</p>';}
+}
+async function openDetail(runId){
+  try{const r=await api('./api/forecast/'+encodeURIComponent(runId));
+    const row=(k,v)=>(v==null||v==='')?'':`<div class="k">${esc(k)}</div><div>${esc(v)}</div>`;
+    let hats='';['white_hat','red_hat','black_hat','yellow_hat','green_hat','blue_hat'].forEach(h=>{if(r[h])hats+=`<div class="k">${h}</div><div>${esc(r[h])}</div>`;});
+    $('#fxModalBox').innerHTML=`<span class="x" id="fxClose">✕</span>
+      <h2 style="margin-top:0">${esc(r.model)} · ${esc(r.prompt_id)} · ${esc(r.match_moment||'')}</h2>
+      <div class="kv">
+        ${row('match',r.match_id+'. '+r.team_1+' v '+r.team_2)}${row('order',r.team_order_type)}${row('rep',r.repetition_number)}
+        ${row('predicted',(r.parsed_score_team_1!=null?r.parsed_score_team_1+'-'+r.parsed_score_team_2:'–'))}
+        ${row('probs (1/X/2)',[r.parsed_team1_win_probability,r.parsed_draw_probability,r.parsed_team2_win_probability].join(' / '))}
+        ${row('json valid',r.json_valid?'yes':'no')}${row('status',r.execution_status)}${row('latency ms',r.latency_ms)}
+        ${row('tokens p/c/total',[r.prompt_tokens,r.completion_tokens,r.total_tokens].join(' / '))}${row('cost usd',r.api_cost)}
+        ${row('error',r.error_message)}</div>
+      ${hats?`<h2>Six hats</h2><div class="kv">${hats}</div>`:''}
+      <h2>Raw response</h2><pre class="log" style="max-height:260px">${esc(r.raw_response||'(none)')}</pre>
+      <h2>Prompt sent</h2><pre class="log" style="max-height:200px">${esc(r.prompt_text||'')}</pre>`;
+    $('#fxModal').classList.remove('hide');
+    $('#fxClose').onclick=()=>$('#fxModal').classList.add('hide');
+  }catch(e){toast('Error: '+e.message);}
+}
+$('#fxModal').onclick=e=>{if(e.target.id==='fxModal')$('#fxModal').classList.add('hide');};
 
 boot().then(()=>{ // resume polling if a job is already running
   fetch('./api/job').then(r=>r.json()).then(j=>{if(j.status==='running')startPolling();else renderJob(j);});
