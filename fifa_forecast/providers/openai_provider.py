@@ -48,7 +48,10 @@ class OpenAICompatibleProvider(BaseProvider):
             raise ProviderError(
                 "The 'openai' package is not installed. Run: pip install openai"
             ) from exc
-        api_key = os.environ.get(self.api_key_env)
+        # Local / self-hosted OpenAI-compatible servers (Ollama, vLLM, LM Studio)
+        # ignore the key but the SDK still requires a non-empty string, so a
+        # literal `api_key` in the model entry is used when the env var is unset.
+        api_key = os.environ.get(self.api_key_env) or self.model_config.get("api_key")
         if not api_key:
             raise ProviderError(
                 f"Environment variable {self.api_key_env} is not set."
@@ -76,10 +79,12 @@ class OpenAICompatibleProvider(BaseProvider):
             kwargs["seed"] = p["seed"]
         if "reasoning_effort" in p:
             kwargs["reasoning_effort"] = p["reasoning_effort"]
-        # Newer models use max_completion_tokens; accept either key in config.
+        # Newer OpenAI models use max_completion_tokens; local servers (Ollama)
+        # only honor max_tokens (mapped to num_predict) and would otherwise
+        # truncate the reply. A model entry can pin the key via token_param.
         max_tokens = p.get("max_output_tokens", p.get("max_tokens"))
         if max_tokens is not None:
-            kwargs["max_completion_tokens"] = max_tokens
+            kwargs[p.get("token_param", "max_completion_tokens")] = max_tokens
         # Ask for a JSON object unless explicitly disabled.
         if p.get("response_format") != "none":
             kwargs["response_format"] = {"type": "json_object"}

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 from typing import Sequence
 
 from . import config as cfg
@@ -238,6 +239,29 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-export", action="store_true", help="Skip rebuilding the Excel workbook."
     )
 
+    p_merge = sub.add_parser(
+        "merge",
+        help="Merge forecast rows from one or more other SQLite DBs into this one "
+        "(e.g. combine a machine that ran local models with the main DB).",
+    )
+    _add_common(p_merge)
+    p_merge.add_argument(
+        "--from",
+        dest="from_db",
+        action="append",
+        required=True,
+        metavar="PATH.db",
+        help="Source .db file to merge in. Repeatable.",
+    )
+    p_merge.add_argument(
+        "--replace",
+        action="store_true",
+        help="Overwrite rows sharing a run_id (default: keep the existing row).",
+    )
+    p_merge.add_argument(
+        "--no-export", action="store_true", help="Skip rebuilding the Excel workbook."
+    )
+
     p_info = sub.add_parser("info", help="Print the planned execution count.")
     _add_common(p_info)
     p_info.add_argument(
@@ -412,6 +436,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not args.no_excel and ev.tables:
             path = write_evaluation_excel(ev, args.out)
             print(f"\nEvaluation workbook written: {path}")
+        return 0
+
+    if command == "merge":
+        db = Database(cfg.ROOT / config.database_path)
+        try:
+            for src in args.from_db:
+                src_path = Path(src)
+                if not src_path.is_absolute():
+                    src_path = cfg.ROOT / src_path
+                stats = db.merge_from(src_path, replace=args.replace)
+                print(
+                    f"Merged {src_path.name}: +{stats['runs_added']} run row(s), "
+                    f"+{stats['results_added']} result row(s)."
+                )
+            print(
+                f"Totals now: {db.count()} forecast rows, "
+                f"{db.count_results()} result rows."
+            )
+        finally:
+            db.close()
+        if not args.no_export:
+            path = export_workbook(config)
+            print(f"Workbook written: {path}")
         return 0
 
     if command == "manifest":

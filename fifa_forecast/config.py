@@ -78,6 +78,11 @@ EXCEL_FILENAME = "FIFA_World_Cup_2026_AI_Forecasts.xlsx"
 #     Depth is controlled by output_config.effort (passed via params.effort).
 #   * OpenAI GPT-5 reasoning models use reasoning_effort and only accept the
 #     default temperature; we therefore omit temperature for them.
+
+# Local Ollama endpoint (OpenAI-compatible). Override with OLLAMA_BASE_URL to
+# target a different host/port or a remote box running Ollama.
+_OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+
 DEFAULT_MODELS: list[dict[str, Any]] = [
     # ---- OpenAI -----------------------------------------------------------
     {
@@ -114,8 +119,9 @@ DEFAULT_MODELS: list[dict[str, Any]] = [
         "model_id": "claude-opus-4-8",
         "enabled": True,
         "api_key_env": "ANTHROPIC_API_KEY",
-        # No temperature/top_p (rejected by Opus 4.8). effort controls depth.
-        "params": {"effort": "medium", "max_tokens": 8000},
+        # No temperature/top_p (rejected by Opus 4.8). effort controls depth;
+        # "low" keeps reasoning/output short to cut cost (six-hats dominates spend).
+        "params": {"effort": "low", "max_tokens": 8000},
         "pricing": {"input": 5.0, "output": 25.0},
     },
     {
@@ -124,8 +130,19 @@ DEFAULT_MODELS: list[dict[str, Any]] = [
         "model_id": "claude-sonnet-4-6",
         "enabled": True,
         "api_key_env": "ANTHROPIC_API_KEY",
-        "params": {"effort": "medium", "max_tokens": 8000},
+        "params": {"effort": "low", "max_tokens": 8000},
         "pricing": {"input": 3.0, "output": 15.0},
+    },
+    {
+        "key": "claude-haiku",
+        "provider": "anthropic",
+        "model_id": "claude-haiku-4-5",
+        "enabled": True,
+        "api_key_env": "ANTHROPIC_API_KEY",
+        # Haiku 4.5 does NOT accept output_config/effort (400s) — omit it. No
+        # thinking = cheapest; it's the low-cost Claude tier for comparison.
+        "params": {"max_tokens": 8000},
+        "pricing": {"input": 1.0, "output": 5.0},
     },
     # ---- Google Gemini ----------------------------------------------------
     {
@@ -157,6 +174,64 @@ DEFAULT_MODELS: list[dict[str, Any]] = [
         "params": {"temperature": 1.0, "top_p": 1.0, "max_tokens": 8000},
         "pricing": {"input": 3.0, "output": 15.0},  # ESTIMATE — verify
     },
+    # ---- Local open models via Ollama (OpenAI-compatible, zero API cost) ---
+    # These need a local Ollama server running (`ollama serve`) with the model
+    # pulled (e.g. `ollama pull qwen2.5:7b`). They reuse the OpenAI adapter via
+    # base_url; api_key is a literal placeholder since Ollama ignores it. Set
+    # OLLAMA_BASE_URL to point at a remote/other box. token_param=max_tokens is
+    # required — Ollama only reads max_tokens (num_predict). pricing=None so
+    # api_cost is stored NULL (running these is free).
+    #
+    # model_id is the Ollama tag: swap to a lighter tag (e.g. qwen2.5:3b,
+    # gemma2:2b) if RAM is tight, or a heavier one if you have the VRAM/RAM.
+    {
+        "key": "qwen-local",
+        "provider": "openai",
+        "model_id": "qwen2.5:7b",
+        "enabled": True,
+        "api_key_env": "OLLAMA_API_KEY",
+        "api_key": "ollama",
+        "base_url": _OLLAMA_BASE_URL,
+        "params": {
+            "temperature": 1.0,
+            "top_p": 0.95,
+            "max_tokens": 8000,
+            "token_param": "max_tokens",
+        },
+        "pricing": None,
+    },
+    {
+        "key": "mistral-local",
+        "provider": "openai",
+        "model_id": "mistral:7b",
+        "enabled": True,
+        "api_key_env": "OLLAMA_API_KEY",
+        "api_key": "ollama",
+        "base_url": _OLLAMA_BASE_URL,
+        "params": {
+            "temperature": 1.0,
+            "top_p": 0.95,
+            "max_tokens": 8000,
+            "token_param": "max_tokens",
+        },
+        "pricing": None,
+    },
+    {
+        "key": "gemma-local",
+        "provider": "openai",
+        "model_id": "gemma2:9b",
+        "enabled": True,
+        "api_key_env": "OLLAMA_API_KEY",
+        "api_key": "ollama",
+        "base_url": _OLLAMA_BASE_URL,
+        "params": {
+            "temperature": 1.0,
+            "top_p": 0.95,
+            "max_tokens": 8000,
+            "token_param": "max_tokens",
+        },
+        "pricing": None,
+    },
 ]
 
 # Repetitions per model — set once here so you don't re-enter a count on every
@@ -165,9 +240,12 @@ DEFAULT_MODELS: list[dict[str, Any]] = [
 # falls back to runs_per_combination.
 _REPS_PER_MODEL: dict[str, int] = {
     "gpt-5": 5, "gpt-5-mini": 5, "gpt-5-nano": 5,
-    "claude-opus": 2, "claude-sonnet": 2,
+    # Claude reps cut to 1 to reduce spend (six-hats output is ~85% of cost).
+    "claude-opus": 1, "claude-sonnet": 1, "claude-haiku": 1,
     "gemini-2.5-pro": 2, "gemini-2.5-flash": 2,
     "grok": 5,
+    # Local models are free but CPU-slow — keep reps modest (raise freely).
+    "qwen-local": 2, "mistral-local": 2, "gemma-local": 2,
 }
 for _model in DEFAULT_MODELS:
     _model.setdefault("reps", _REPS_PER_MODEL.get(_model["key"], 10))

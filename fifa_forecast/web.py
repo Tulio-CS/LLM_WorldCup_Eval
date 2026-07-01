@@ -32,7 +32,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
@@ -43,6 +43,7 @@ from . import prompts as prompt_lib
 from .evaluation import build_evaluation, per_match_comparison, write_evaluation_excel
 from .export import export_workbook
 from .matches import load_matches
+from .storage import Database
 
 app = FastAPI(title="FIFA WC2026 Forecast Dashboard", version=__version__)
 
@@ -471,6 +472,45 @@ def action_report(_: None = Depends(require_action)) -> JSONResponse:
     return JSONResponse({"ok": ok, "message": msg}, status_code=200 if ok else 409)
 
 
+@app.post("/actions/merge-upload")
+async def action_merge_upload(
+    file: UploadFile = File(...),
+    replace: bool = Form(False),
+    _: None = Depends(require_action),
+) -> JSONResponse:
+    """Merge a forecast .db uploaded from another machine into the server DB.
+
+    This is how locally-run models (Ollama on your PC) reach the Coolify DB:
+    run the collection locally into a scratch .db, then upload it here. Rows are
+    added by deterministic run_id (INSERT OR IGNORE), so cloud rows are never
+    clobbered; ``replace=true`` overwrites same-id rows instead.
+    """
+    up_dir = cfg.DATA_DIR / "uploads"
+    up_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    tmp = up_dir / f"merge_{stamp}.db"
+    data = await file.read()
+    tmp.write_bytes(data)
+    try:
+        if data[:16] != b"SQLite format 3\x00":
+            raise HTTPException(400, "Uploaded file is not a SQLite database.")
+        db = Database(_db_path())
+        try:
+            stats = db.merge_from(tmp, replace=replace)
+        finally:
+            db.close()
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 - surface a clean message to the UI
+        raise HTTPException(400, f"Merge failed: {exc}")
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:  # pragma: no cover
+            pass
+    return JSONResponse({"ok": True, "filename": file.filename, **stats})
+
+
 # --------------------------------------------------------------------------- #
 # Downloads
 # --------------------------------------------------------------------------- #
@@ -704,6 +744,16 @@ tr:hover td{background:#0e1726}
       <p><a href="./download/forecasts">⬇ Full forecasts workbook</a></p>
       <p><a href="./download/report">⬇ Quality / variability report</a></p>
     </div>
+    <div class="panel"><h2>Import local runs</h2>
+      <p class="muted small">Ran open models (Qwen / Mistral / Gemma) on your own machine?
+        Upload the resulting <code>.db</code> file to merge those forecasts into this
+        server's database. Existing rows are kept (matched by run_id); tick replace to
+        overwrite same-id rows.</p>
+      <p><input type="file" id="mergeFile" accept=".db,.sqlite,application/octet-stream"></p>
+      <label class="small"><input type="checkbox" id="mergeReplace"> replace rows with the same run_id</label>
+      <p><button class="btn" id="btnMerge">⬆ Upload &amp; merge</button></p>
+      <div id="mergeMsg" class="muted small"></div>
+    </div>
   </section>
 </div>
 <div id="fxModal" class="modal hide"><div class="modalbox" id="fxModalBox"></div></div>
@@ -816,6 +866,18 @@ $$('[data-fetch]').forEach(b=>b.onclick=async()=>{
     toast(r.ok?'Fetch started':('Busy: '+r.message));startPolling();}catch(e){toast('Error: '+e.message);}});
 $('#btnReport').onclick=async()=>{try{const r=await api('./actions/report',{method:'POST'});
   toast(r.ok?'Report rebuild started':('Busy: '+r.message));startPolling();}catch(e){toast('Error: '+e.message);}};
+$('#btnMerge').onclick=async()=>{
+  const f=$('#mergeFile').files[0];
+  if(!f)return toast('Choose a .db file first.');
+  const fd=new FormData();fd.append('file',f);fd.append('replace',$('#mergeReplace').checked?'true':'false');
+  const btn=$('#btnMerge');btn.disabled=true;$('#mergeMsg').textContent='Uploading & merging…';
+  try{const r=await api('./actions/merge-upload',{method:'POST',body:fd});
+    $('#mergeMsg').innerHTML=`Merged <b>${esc(r.filename||'')}</b>: +${r.runs_added} forecast row(s), +${r.results_added} result row(s). `+
+      `Totals: ${r.runs_total} forecasts, ${r.results_total} results.`;
+    toast(`Merged +${r.runs_added} rows`);refreshSummary();}
+  catch(e){$('#mergeMsg').textContent='Error: '+e.message;toast('Merge failed');}
+  finally{btn.disabled=false;}
+};
 
 function renderJob(j){
   const badge=$('#jobBadge');badge.className='badge b-'+(j.status||'idle');badge.textContent=j.status||'idle';

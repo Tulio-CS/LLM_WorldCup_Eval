@@ -221,6 +221,52 @@ class Database:
         rows = self.conn.execute("SELECT * FROM forecast_runs").fetchall()
         return [dict(row) for row in rows]
 
+    def merge_from(self, other_path: str | Path, *, replace: bool = False) -> dict[str, int]:
+        """Copy rows from another forecast DB into this one.
+
+        run_id / result primary keys are deterministic, so merging is safe and
+        idempotent: by default existing rows are kept (INSERT OR IGNORE); pass
+        ``replace=True`` to overwrite same-id rows (INSERT OR REPLACE). Only the
+        columns present in *both* schemas are copied, so an older source DB
+        missing newer columns still merges cleanly. Returns how many rows were
+        added to each table.
+        """
+        other = Path(other_path)
+        if not other.exists():
+            raise FileNotFoundError(f"Source database not found: {other}")
+        verb = "REPLACE" if replace else "IGNORE"
+        before_runs, before_results = self.count(), self.count_results()
+
+        self.conn.execute("ATTACH DATABASE ? AS src", (str(other),))
+        try:
+            def _copy(table: str, canonical: list[str]) -> None:
+                exists = self.conn.execute(
+                    "SELECT 1 FROM src.sqlite_master WHERE type='table' AND name=?",
+                    (table,),
+                ).fetchone()
+                if not exists:
+                    return
+                src_cols = {row[1] for row in self.conn.execute(f"PRAGMA src.table_info({table})")}
+                cols = [c for c in canonical if c in src_cols]
+                col_sql = ", ".join(cols)
+                self.conn.execute(
+                    f"INSERT OR {verb} INTO {table} ({col_sql}) "
+                    f"SELECT {col_sql} FROM src.{table}"
+                )
+
+            _copy("forecast_runs", _COLUMN_NAMES)
+            _copy("match_results", RESULT_COLUMN_NAMES)
+            self.conn.commit()
+        finally:
+            self.conn.execute("DETACH DATABASE src")
+
+        return {
+            "runs_added": self.count() - before_runs,
+            "results_added": self.count_results() - before_results,
+            "runs_total": self.count(),
+            "results_total": self.count_results(),
+        }
+
     # -- results ------------------------------------------------------------
     def upsert_result(self, result: MatchResult) -> None:
         values = [getattr(result, name) for name in RESULT_COLUMN_NAMES]
