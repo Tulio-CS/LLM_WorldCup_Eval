@@ -159,6 +159,19 @@ DEFAULT_MODELS: list[dict[str, Any]] = [
     },
 ]
 
+# Repetitions per model — set once here so you don't re-enter a count on every
+# run. Both team orderings (original + reversed) run for each rep, so reps=5
+# means 5 original + 5 reversed per (prompt, moment). Any model not listed
+# falls back to runs_per_combination.
+_REPS_PER_MODEL: dict[str, int] = {
+    "gpt-5": 5, "gpt-5-mini": 5, "gpt-5-nano": 5,
+    "claude-opus": 2, "claude-sonnet": 2,
+    "gemini-2.5-pro": 2, "gemini-2.5-flash": 2,
+    "grok": 5,
+}
+for _model in DEFAULT_MODELS:
+    _model.setdefault("reps", _REPS_PER_MODEL.get(_model["key"], 10))
+
 
 @dataclass
 class Config:
@@ -203,6 +216,12 @@ class Config:
             if m.get("key") == key:
                 return m
         return None
+
+    def reps_for(self, key: str) -> int:
+        m = self.model_by_key(key)
+        if m and m.get("reps") is not None:
+            return int(m["reps"])
+        return self.runs_per_combination
 
 
 def load_config(overrides_path: str | os.PathLike | None = None) -> Config:

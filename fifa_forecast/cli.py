@@ -99,7 +99,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--reps",
         type=int,
         default=None,
-        help="Repetitions per combination (default: config runs_per_combination).",
+        help="Override repetitions for every model (default: each model's config reps).",
+    )
+    p_run.add_argument(
+        "--retry-errors",
+        action="store_true",
+        help="Re-run combinations that previously errored (plus any missing ones); "
+        "successful ones are still skipped.",
     )
     p_run.add_argument(
         "--no-export",
@@ -440,6 +446,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             moments=args.moment,
             model_keys=args.model,
             reps=args.reps,
+            retry_errors=args.retry_errors,
         )
     finally:
         runner.close()

@@ -210,6 +210,13 @@ class Database:
             sql += f" WHERE {where}"
         return int(self.conn.execute(sql, params).fetchone()[0])
 
+    def status_of(self, run_id: str) -> str | None:
+        """Return 'success' / 'error' for an existing run, or None if missing."""
+        row = self.conn.execute(
+            "SELECT execution_status FROM forecast_runs WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        return row[0] if row else None
+
     def fetch_all(self) -> list[dict[str, Any]]:
         rows = self.conn.execute("SELECT * FROM forecast_runs").fetchall()
         return [dict(row) for row in rows]

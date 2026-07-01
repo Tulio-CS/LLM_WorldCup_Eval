@@ -84,6 +84,7 @@ class ExperimentRunner:
         self.config = config
         self.dry_run = dry_run
         self.overwrite = overwrite
+        self.retry_errors = False
         self.progress = progress or (lambda msg: None)
         self.db = Database(cfg.ROOT / config.database_path)
         self.archive = FileArchive()
@@ -120,7 +121,9 @@ class ExperimentRunner:
         moments: list[str] | None = None,
         model_keys: list[str] | None = None,
         reps: int | None = None,
+        retry_errors: bool = False,
     ) -> dict[str, int]:
+        self.retry_errors = retry_errors
         matches = load_matches(cfg.ROOT / self.config.matches_csv)
         matches = filter_matches(matches, dates=dates, match_ids=match_ids)
         if limit_matches is not None:
@@ -139,25 +142,27 @@ class ExperimentRunner:
             m for m in self.config.enabled_models()
             if wanted is None or m["key"] in wanted
         ]
-        eff_reps = reps if reps is not None else self.config.runs_per_combination
         if not eff_models:
             self.progress("No models selected (check --model). Nothing to do.")
             return dict(self.stats)
 
-        total_planned = (
-            len(matches)
-            * len(self.config.team_order_types)
-            * len(eff_moments)
-            * len(eff_models)
-            * len(self.config.prompt_ids)
-            * eff_reps
+        def reps_for(mc: dict[str, Any]) -> int:
+            if reps is not None:  # explicit override applies to every model
+                return reps
+            return int(mc.get("reps", self.config.runs_per_combination))
+
+        n_orders = len(self.config.team_order_types)
+        n_cells = len(matches) * n_orders * len(eff_moments) * len(self.config.prompt_ids)
+        total_planned = n_cells * sum(reps_for(mc) for mc in eff_models)
+        reps_desc = (
+            f"{reps} (override)" if reps is not None
+            else "per-model[" + ", ".join(f"{mc['key']}={reps_for(mc)}" for mc in eff_models) + "]"
         )
         self.progress(
             f"Planned executions: {total_planned} "
-            f"({len(matches)} matches x {len(self.config.team_order_types)} orders "
-            f"x {len(eff_moments)} moments "
-            f"x {len(eff_models)} models x {len(self.config.prompt_ids)} prompts "
-            f"x {eff_reps} reps)"
+            f"({len(matches)} matches x {n_orders} orders x {len(eff_moments)} moments "
+            f"x {len(eff_models)} models x {len(self.config.prompt_ids)} prompts; "
+            f"reps={reps_desc}" + ("; RETRY errors+missing" if retry_errors else "") + ")"
         )
 
         done = 0
@@ -165,8 +170,9 @@ class ExperimentRunner:
             for moment in eff_moments:
                 for order in self.config.team_order_types:
                     for model_config in eff_models:
+                        mreps = reps_for(model_config)
                         for prompt_id in self.config.prompt_ids:
-                            for rep in range(1, eff_reps + 1):
+                            for rep in range(1, mreps + 1):
                                 done += 1
                                 detail = self._execute_one(
                                     match, order, moment, model_config, prompt_id, rep
@@ -192,9 +198,13 @@ class ExperimentRunner:
             match.match_id, model_config["key"], prompt_id, order, rep, moment
         )
 
-        if not self.overwrite and self.db.count("run_id = ?", (run_id,)) > 0:
+        status = self.db.status_of(run_id)
+        if status == "success" and not self.overwrite:
             self.stats["skipped"] += 1
             return f"skip  {run_id}"
+        if status == "error" and not (self.overwrite or self.retry_errors):
+            self.stats["skipped"] += 1
+            return f"skip  {run_id} (prev error)"
 
         first, second = ordered_pair(match, order)
         kickoff = match.kickoff_local or match.kickoff_datetime

@@ -244,7 +244,8 @@ def health() -> JSONResponse:
 def api_bootstrap(_: None = Depends(require_view)) -> JSONResponse:
     config = cfg.load_config()
     models = [
-        {"key": m["key"], "provider": m.get("provider"), "model_id": m.get("model_id")}
+        {"key": m["key"], "provider": m.get("provider"), "model_id": m.get("model_id"),
+         "reps": config.reps_for(m["key"])}
         for m in config.enabled_models()
     ]
     return JSONResponse({
@@ -254,6 +255,7 @@ def api_bootstrap(_: None = Depends(require_view)) -> JSONResponse:
         "moments": list(prompt_lib.MATCH_MOMENTS),
         "default_moments": list(config.match_moments),
         "reps_default": config.runs_per_combination,
+        "orders": len(config.team_order_types),
         "models": models,
         "prompts": list(config.prompt_ids),
         "matches": _matches_overview(config),
@@ -416,7 +418,8 @@ class RunReq(BaseModel):
     match_ids: list[str] = []       # run several matches at once ([] = all)
     moments: list[str] = []
     models: list[str] = []
-    reps: int | None = None
+    reps: int | None = None         # override for every model (None = per-model)
+    retry_errors: bool = False      # re-run errored + missing; keep successes
     dry_run: bool = False
 
 
@@ -440,6 +443,8 @@ def action_run(req: RunReq, _: None = Depends(require_action)) -> JSONResponse:
         args += ["--model", k]
     if req.reps:
         args += ["--reps", str(req.reps)]
+    if req.retry_errors:
+        args.append("--retry-errors")
     if req.dry_run:
         args.append("--dry-run")
     ok, msg = start_job(args)
@@ -622,7 +627,8 @@ tr:hover td{background:#0e1726}
       <div style="margin-bottom:14px"><label>Moments</label><div class="checkset" id="runMoments"></div></div>
       <div style="margin-bottom:14px"><label>Models</label><div class="checkset" id="runModels"></div>
         <div class="small muted" style="margin-top:6px"><a href="#" id="modelsAll">select all</a> · <a href="#" id="modelsNone">none</a></div></div>
-      <div class="row"><div style="max-width:140px"><label>Repetitions</label><input type="number" id="runReps" min="1" max="50" value="10"></div></div>
+      <div class="row"><div style="max-width:220px"><label>Reps override (blank = per-model)</label><input type="number" id="runReps" min="1" max="50" placeholder="per model"></div></div>
+      <label class="chk" style="display:inline-flex;margin-bottom:10px"><input type="checkbox" id="runRetry"> only re-run failed &amp; missing (keep what already succeeded)</label>
       <div class="section-actions">
         <label class="chk"><input type="checkbox" id="runDry"> dry-run (free, mock)</label>
         <button class="btn warn" id="btnRun">▶ Run</button>
@@ -767,12 +773,12 @@ async function boot(){
 }
 
 function buildRunForm(){
-  $('#runReps').value=BOOT.reps_default||10;
+  $('#runReps').value='';
   $('#runMoments').innerHTML=BOOT.moments.map(m=>{
     const on=BOOT.default_moments.includes(m)?'checked':'';
     return `<label class="chk"><input type="checkbox" value="${m}" ${on}> ${m}</label>`;}).join('');
   $('#runModels').innerHTML=BOOT.models.map(m=>
-    `<label class="chk"><input type="checkbox" value="${m.key}" checked> ${esc(m.key)} <span class="muted small">(${esc(m.provider)})</span></label>`).join('');
+    `<label class="chk"><input type="checkbox" value="${m.key}" checked> ${esc(m.key)} <span class="muted small">(${esc(m.provider)}) · ${m.reps}×</span></label>`).join('');
   const act=BOOT.actions_enabled;
   $('#btnRun').disabled=!act;
   $$('[data-fetch]').forEach(b=>b.disabled=!act); $('#btnReport').disabled=!act;
@@ -784,10 +790,11 @@ function selModels(){return $$('#runModels input:checked').map(i=>i.value);}
 function selMoments(){return $$('#runMoments input:checked').map(i=>i.value);}
 function selMatches(){return $$('#runMatchList input:checked').map(i=>i.value);}
 function updateEstimate(){
-  const c=selMatches().length;
-  const matches=c||BOOT.matches.length;
-  const calls=matches*Math.max(selMoments().length,1)*Math.max(selModels().length,1)*BOOT.prompts.length*(+$('#runReps').value||1);
-  $('#runEstimate').textContent=`≈ ${calls.toLocaleString()} API calls`;
+  const c=selMatches().length, matches=c||BOOT.matches.length;
+  const override=+$('#runReps').value||null, orders=BOOT.orders||2;
+  const repsSum=selModels().reduce((a,k)=>{const m=BOOT.models.find(x=>x.key===k);return a+(override||(m?m.reps:1));},0);
+  const calls=matches*Math.max(selMoments().length,1)*BOOT.prompts.length*orders*repsSum;
+  $('#runEstimate').textContent=`≈ ${calls.toLocaleString()} API calls (${orders} orderings)`;
   const mc=$('#matchCount'); if(mc)mc.textContent=c?`${c} selected`:'none → all matches';
 }
 $('#modelsAll').onclick=e=>{e.preventDefault();$$('#runModels input').forEach(i=>i.checked=true);updateEstimate();};
@@ -795,7 +802,7 @@ $('#modelsNone').onclick=e=>{e.preventDefault();$$('#runModels input').forEach(i
 
 $('#btnRun').onclick=async()=>{
   const body={match_ids:selMatches(),moments:selMoments(),models:selModels(),
-    reps:+$('#runReps').value||null,dry_run:$('#runDry').checked};
+    reps:+$('#runReps').value||null,retry_errors:$('#runRetry').checked,dry_run:$('#runDry').checked};
   if(!body.models.length)return toast('Select at least one model.');
   if(!body.moments.length)return toast('Select at least one moment.');
   if(!body.dry_run && !confirm('This calls the paid LLM APIs and may cost money. Continue?'))return;
