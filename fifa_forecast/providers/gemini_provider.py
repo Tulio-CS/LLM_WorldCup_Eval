@@ -81,6 +81,14 @@ class GeminiProvider(BaseProvider):
         max_tokens = p.get("max_output_tokens", p.get("max_tokens"))
         if max_tokens is not None:
             cfg_kwargs["max_output_tokens"] = max_tokens
+        # Thinking budget (Gemini's analog to "effort"): caps reasoning tokens,
+        # which are billed at the output rate. 0 disables (Flash only); Pro's
+        # minimum is 128; -1 lets the model decide (dynamic, the default when
+        # unset). Only sent when a model entry lists it.
+        if "thinking_budget" in p:
+            cfg_kwargs["thinking_config"] = types.ThinkingConfig(
+                thinking_budget=p["thinking_budget"]
+            )
         return types.GenerateContentConfig(**cfg_kwargs)
 
     def generate(self, system_prompt: str, user_prompt: str) -> ProviderResult:

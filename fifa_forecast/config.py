@@ -151,7 +151,15 @@ DEFAULT_MODELS: list[dict[str, Any]] = [
         "model_id": "gemini-2.5-pro",
         "enabled": True,
         "api_key_env": "GEMINI_API_KEY",
-        "params": {"temperature": 1.0, "top_p": 0.95, "max_output_tokens": 8000},
+        # thinking_budget caps reasoning tokens (billed as output). 512 is a
+        # balance: real reasoning room without the dynamic blow-up (~1.2k/call).
+        # Pro can't fully disable thinking (min 128); Flash left on dynamic.
+        "params": {
+            "temperature": 1.0,
+            "top_p": 0.95,
+            "max_output_tokens": 8000,
+            "thinking_budget": 512,
+        },
         "pricing": {"input": 1.25, "output": 10.0},  # ESTIMATE — verify
     },
     {

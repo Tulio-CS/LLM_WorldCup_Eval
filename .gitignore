@@ -2,8 +2,15 @@
 .env
 .env.example
 .env.*
-
+data/
 # Generated dataset & artifacts
+*.db
+*.db-wal
+*.db-shm
+experiment_manifest.json
+
+# Local tooling
+OllamaSetup.exe
 
 # Python
 __pycache__/
