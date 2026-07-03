@@ -1310,12 +1310,22 @@ $$('.tab').forEach(t=>t.onclick=()=>tab(t.dataset.tab));
 // ---- Analytics ----------------------------------------------------------
 let AN={sum:null};
 let MODEL_COLOR={};
-const svgOpen=(W,H)=>`<svg viewBox="0 0 ${W} ${H}" width="100%" style="font:11px system-ui">`;
+// Fixed-pixel SVGs (no viewBox stretching) keep text crisp and consistently sized.
+const svgOpen=(W,H)=>`<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="font:12px system-ui;max-width:100%;height:auto;display:block">`;
 const MOMENT_COLORS={pre_match:'#3b82f6',halftime:'#f59e0b',post_match:'#22c55e'};
 function modelColor(m){return MODEL_COLOR[m]||'#64748b';}
+function chartW(el,max){
+  let w=(el&&el.clientWidth)||0;
+  if(w<100)w=(el&&el.parentElement&&el.parentElement.clientWidth)||0;  // transient 0-width guard
+  if(w<100)w=720;
+  return Math.max(340,Math.min(max||980,w-2));
+}
+function labelPad(names){const L=Math.max(6,...names.map(s=>String(s).length));return Math.min(190,Math.max(90,14+L*7.3));}
+function shortName(s,n){n=n||22;s=String(s);return s.length>n?s.slice(0,n-1)+'…':s;}
 function noData(sel,msg){$(sel).innerHTML='<div class="small muted">'+esc(msg||(AN.sum&&AN.sum.note)||'No data yet — ingest finished results first.')+'</div>';}
 function fmtCost(c){return c==null?'free':('$'+(c<0.01?c.toFixed(4):c.toFixed(3)));}
 function fmtK(v){return v==null?'–':(v>=1e6?(v/1e6).toFixed(2)+'M':v>=1e3?(v/1e3).toFixed(1)+'k':String(Math.round(v)));}
+function pct1(v){return v==null?'–':((+v).toFixed(1).replace(/\.0$/,'')+'%');}
 function anQ(){return `prompt=${encodeURIComponent($('#anPrompt').value||'all')}&moment=${encodeURIComponent($('#anMomentG').value||'all')}`;}
 function boxQuery(){
   const p=$('#anPrompt').value||'all', g=$('#boxGroup').value||'model_prompt';
@@ -1367,111 +1377,117 @@ function renderKpiCards(){
 function renderPrompts(){
   const ps=(AN.sum&&AN.sum.prompts)||[],el=$('#chPrompts');
   if(!ps.length)return noData('#chPrompts');
-  const W=Math.min(940,el.clientWidth||860),padL=110,padR=330,rowH=36,H=14+ps.length*rowH+22;
+  const padL=labelPad(ps.map(p=>p.prompt_id.replace('-prediction','')));
+  const W=chartW(el,980),padR=235,rowH=46,H=16+ps.length*rowH+26;
   const x=v=>padL+((v||0)/100)*(W-padL-padR);
   let s=svgOpen(W,H);
   for(let t=0;t<=4;t++){const xx=x(t*25);
-    s+=`<line x1="${xx}" y1="8" x2="${xx}" y2="${H-18}" stroke="var(--border)"/>`;
-    s+=`<text x="${xx}" y="${H-5}" fill="var(--muted)" text-anchor="middle">${t*25}%</text>`;}
-  ps.forEach((p,i)=>{const cy=12+i*rowH,col=pcolor(p.prompt_id);
-    s+=`<text x="${padL-8}" y="${cy+13}" fill="${col}" text-anchor="end" font-weight="600">${esc(p.prompt_id.replace('-prediction',''))}</text>`;
-    s+=`<rect x="${padL}" y="${cy}" width="${Math.max(1,x(p.outcome_acc)-padL)}" height="12" rx="2" fill="${col}"><title>per-prediction winner accuracy: ${p.outcome_acc??'–'}%</title></rect>`;
-    s+=`<rect x="${padL}" y="${cy+14}" width="${Math.max(1,x(p.exact_acc)-padL)}" height="5" rx="2" fill="${col}" opacity="0.45"><title>exact score: ${p.exact_acc??'–'}%</title></rect>`;
+    s+=`<line x1="${xx}" y1="10" x2="${xx}" y2="${H-22}" stroke="var(--border)"/>`;
+    s+=`<text x="${xx}" y="${H-8}" fill="var(--muted)" text-anchor="middle" font-size="11">${t*25}%</text>`;}
+  ps.forEach((p,i)=>{const cy=18+i*rowH,col=pcolor(p.prompt_id);
+    s+=`<text x="${padL-9}" y="${cy+13}" fill="${col}" text-anchor="end" font-weight="600">${esc(p.prompt_id.replace('-prediction',''))}</text>`;
+    s+=`<rect x="${padL}" y="${cy}" width="${Math.max(1,x(p.outcome_acc)-padL)}" height="13" rx="2" fill="${col}"><title>per-prediction winner accuracy: ${p.outcome_acc??'–'}%</title></rect>`;
+    s+=`<rect x="${padL}" y="${cy+15}" width="${Math.max(1,x(p.exact_acc)-padL)}" height="5" rx="2" fill="${col}" opacity="0.45"><title>exact score: ${p.exact_acc??'–'}%</title></rect>`;
     if(p.modal_acc!=null){const mx=x(p.modal_acc);
-      s+=`<path d="M ${mx} ${cy} l 5 8 l -5 8 l -5 -8 Z" fill="none" stroke="var(--txt)" stroke-width="1.5"><title>majority vote per match: ${p.modal_acc}%</title></path>`;}
-    s+=`<text x="${Math.max(x(p.outcome_acc),x(p.exact_acc),x(p.modal_acc||0))+8}" y="${cy+13}" fill="var(--muted)">${p.outcome_acc??'–'}% win · ${p.exact_acc??'–'}% exact · brier ${p.brier??'–'} · ${fmtK(p.avg_out_tokens)} out-tok · n=${p.n}</text>`;});
+      s+=`<path d="M ${mx} ${cy} l 6 9 l -6 9 l -6 -9 Z" fill="none" stroke="var(--txt)" stroke-width="1.6"><title>majority vote per match: ${p.modal_acc}%</title></path>`;}
+    s+=`<text x="${x(100)+12}" y="${cy+6}" fill="var(--txt)" font-size="11">${pct1(p.outcome_acc)} win · ◇${pct1(p.modal_acc)} · ${pct1(p.exact_acc)} exact</text>`;
+    s+=`<text x="${x(100)+12}" y="${cy+20}" fill="var(--muted)" font-size="11">brier ${p.brier??'–'} · ${fmtK(p.avg_out_tokens)} out · ${fmtK(p.avg_think_tokens)} think · n=${p.n}</text>`;});
   s+='</svg>';el.innerHTML=s;
 }
 function renderUsage(){
   const u=(AN.sum&&AN.sum.usage)||{},el=$('#chUsage');
   const rows=(u.by_model||[]).slice().sort((a,b)=>(b.tokens_in+b.tokens_out+b.tokens_think)-(a.tokens_in+a.tokens_out+a.tokens_think));
   if(!rows.length)return noData('#chUsage','No successful calls under this filter.');
-  const W=Math.min(940,el.clientWidth||860),padL=150,padR=210,rowH=24,H=10+rows.length*rowH+20;
+  const padL=labelPad(rows.map(r=>r.model)),W=chartW(el,980),padR=215,rowH=26,H=12+rows.length*rowH+16;
   const maxT=Math.max(1,...rows.map(r=>r.tokens_in+r.tokens_out+r.tokens_think));
   const x=v=>(v/maxT)*(W-padL-padR);
   let s=svgOpen(W,H);
-  rows.forEach((r,i)=>{const cy=8+i*rowH;let cx=padL;
-    s+=`<text x="${padL-8}" y="${cy+11}" fill="var(--txt)" text-anchor="end">${esc(r.model)}</text>`;
+  rows.forEach((r,i)=>{const cy=10+i*rowH;let cx=padL;
+    s+=`<text x="${padL-9}" y="${cy+11}" fill="var(--txt)" text-anchor="end">${esc(shortName(r.model))}<title>${esc(r.model)}</title></text>`;
     [[r.tokens_in,'#94a3b8','input'],[r.tokens_out,'var(--accent)','output'],[r.tokens_think,'#a855f7','thinking']].forEach(([v,col,lab])=>{
-      const w=x(v);if(w>0.5)s+=`<rect x="${cx}" y="${cy}" width="${w}" height="13" fill="${col}" opacity="0.85"><title>${esc(r.model)} · ${lab}: ${fmtK(v)} tokens</title></rect>`;cx+=w;});
-    s+=`<text x="${cx+6}" y="${cy+11}" fill="var(--muted)">${fmtK(r.tokens_in+r.tokens_out+r.tokens_think)} tok · ${r.cost?('$'+r.cost.toFixed(2)):'free'} · ${fmtK(r.calls)} calls</text>`;});
+      const w=x(v);if(w>0.5)s+=`<rect x="${cx}" y="${cy}" width="${w}" height="14" fill="${col}" opacity="0.85"><title>${esc(r.model)} · ${lab}: ${fmtK(v)} tokens</title></rect>`;cx+=w;});
+    s+=`<text x="${W-padR+8}" y="${cy+11}" fill="var(--muted)" font-size="11">${fmtK(r.tokens_in+r.tokens_out+r.tokens_think)} tok · ${r.cost?('$'+r.cost.toFixed(2)):'free'} · ${fmtK(r.calls)} calls</text>`;});
   s+='</svg>';el.innerHTML=s;
 }
 
 function renderLeader(){
   const ms=(AN.sum&&AN.sum.models)||[],el=$('#chLeader');
   if(!ms.length)return noData('#chLeader');
-  const W=Math.min(940,el.clientWidth||860),padL=150,padR=170,rowH=32,H=14+ms.length*rowH+22;
+  const padL=labelPad(ms.map(m=>m.model)),W=chartW(el,980),padR=175,rowH=34,H=16+ms.length*rowH+26;
   const x=v=>padL+((v||0)/100)*(W-padL-padR);
   let s=svgOpen(W,H);
   for(let t=0;t<=4;t++){const xx=x(t*25);
-    s+=`<line x1="${xx}" y1="8" x2="${xx}" y2="${H-18}" stroke="var(--border)"/>`;
-    s+=`<text x="${xx}" y="${H-5}" fill="var(--muted)" text-anchor="middle">${t*25}%</text>`;}
-  ms.forEach((m,i)=>{const cy=12+i*rowH,col=modelColor(m.model);
-    s+=`<text x="${padL-8}" y="${cy+12}" fill="var(--txt)" text-anchor="end">${esc(m.model)}</text>`;
-    s+=`<rect x="${padL}" y="${cy}" width="${Math.max(1,x(m.outcome_acc)-padL)}" height="12" rx="2" fill="${col}"><title>per-prediction winner accuracy: ${m.outcome_acc??'–'}%</title></rect>`;
-    s+=`<rect x="${padL}" y="${cy+14}" width="${Math.max(1,x(m.exact_acc)-padL)}" height="5" rx="2" fill="${col}" opacity="0.45"><title>exact score: ${m.exact_acc??'–'}%</title></rect>`;
+    s+=`<line x1="${xx}" y1="10" x2="${xx}" y2="${H-22}" stroke="var(--border)"/>`;
+    s+=`<text x="${xx}" y="${H-8}" fill="var(--muted)" text-anchor="middle" font-size="11">${t*25}%</text>`;}
+  ms.forEach((m,i)=>{const cy=14+i*rowH,col=modelColor(m.model);
+    s+=`<text x="${padL-9}" y="${cy+12}" fill="var(--txt)" text-anchor="end">${esc(shortName(m.model))}<title>${esc(m.model)}</title></text>`;
+    s+=`<rect x="${padL}" y="${cy}" width="${Math.max(1,x(m.outcome_acc)-padL)}" height="13" rx="2" fill="${col}"><title>per-prediction winner accuracy: ${m.outcome_acc??'–'}%</title></rect>`;
+    s+=`<rect x="${padL}" y="${cy+15}" width="${Math.max(1,x(m.exact_acc)-padL)}" height="5" rx="2" fill="${col}" opacity="0.45"><title>exact score: ${m.exact_acc??'–'}%</title></rect>`;
     if(m.modal_acc!=null){const mx=x(m.modal_acc);
-      s+=`<path d="M ${mx} ${cy} l 5 8 l -5 8 l -5 -8 Z" fill="none" stroke="var(--txt)" stroke-width="1.5"><title>majority vote per match (race statistic): ${m.modal_acc}%</title></path>`;}
-    s+=`<text x="${Math.max(x(m.outcome_acc),x(m.exact_acc),x(m.modal_acc||0))+8}" y="${cy+13}" fill="var(--muted)">${m.outcome_acc??'–'}% / ◇${m.modal_acc??'–'}% / ${m.exact_acc??'–'}% · n=${m.n}</text>`;});
+      s+=`<path d="M ${mx} ${cy} l 6 9 l -6 9 l -6 -9 Z" fill="none" stroke="var(--txt)" stroke-width="1.6"><title>majority vote per match (race statistic): ${m.modal_acc}%</title></path>`;}
+    s+=`<text x="${x(100)+12}" y="${cy+13}" fill="var(--muted)" font-size="11">${pct1(m.outcome_acc)}  ◇${pct1(m.modal_acc)}  ·n=${m.n}</text>`;});
   s+='</svg>';el.innerHTML=s;
 }
 function renderCost(){
   const ms=((AN.sum&&AN.sum.models)||[]).filter(m=>m.outcome_acc!=null),el=$('#chCost');
   if(!ms.length)return noData('#chCost');
-  const W=Math.min(560,el.clientWidth||460),H=260,padL=42,padR=16,padT=12,padB=30;
+  const W=chartW(el,640),H=300,padL=46,padR=16,padT=14,padB=32,labelRoom=118;
   const maxC=Math.max(1e-9,...ms.map(m=>m.avg_cost||0));
-  const x=c=>padL+Math.sqrt((c||0)/maxC)*(W-padL-padR);
+  const x=c=>padL+Math.sqrt((c||0)/maxC)*(W-padL-padR-labelRoom);
   const y=a=>padT+(1-(a||0)/100)*(H-padT-padB);
   let s=svgOpen(W,H);
   for(let t=0;t<=4;t++){const yy=y(t*25);
     s+=`<line x1="${padL}" y1="${yy}" x2="${W-padR}" y2="${yy}" stroke="var(--border)"/>`;
-    s+=`<text x="${padL-6}" y="${yy+3}" fill="var(--muted)" text-anchor="end">${t*25}%</text>`;}
+    s+=`<text x="${padL-6}" y="${yy+4}" fill="var(--muted)" text-anchor="end" font-size="11">${t*25}%</text>`;}
   [[0,'free'],[maxC/4,fmtCost(maxC/4)],[maxC,fmtCost(maxC)]].forEach(([c,lab])=>{
-    s+=`<text x="${x(c)}" y="${H-6}" fill="var(--muted)" text-anchor="middle">${lab}</text>`;});
-  ms.forEach((m,i)=>{const cx=x(m.avg_cost),cy=y(m.outcome_acc),col=modelColor(m.model);
-    s+=`<circle cx="${cx}" cy="${cy}" r="5" fill="${col}"><title>${esc(m.model)} · acc ${m.outcome_acc}% · ${fmtCost(m.avg_cost)}/call</title></circle>`;
-    const flip=cx>W-90;  // near the right edge, put the label on the left
-    s+=`<text x="${cx+(flip?-7:7)}" y="${cy+(i%2?12:-6)}" fill="var(--txt)" text-anchor="${flip?'end':'start'}">${esc(m.model)}</text>`;});
+    s+=`<text x="${x(c)}" y="${H-8}" fill="var(--muted)" text-anchor="middle" font-size="11">${lab}</text>`;});
+  // Greedy label lanes: sort by y, keep ≥13px between labels, connector when displaced.
+  const pts=ms.map(m=>({m,cx:x(m.avg_cost),cy:y(m.outcome_acc)})).sort((a,b)=>a.cy-b.cy);
+  let lastY=-99;
+  pts.forEach(p=>{p.ly=Math.max(p.cy+4,lastY+13);lastY=p.ly;});
+  const over=lastY-(H-padB-2);
+  if(over>0)pts.forEach(p=>{p.ly-=over;});
+  pts.forEach(p=>{const col=modelColor(p.m.model);
+    s+=`<circle cx="${p.cx}" cy="${p.cy}" r="5.5" fill="${col}"><title>${esc(p.m.model)} · acc ${p.m.outcome_acc}% · ${fmtCost(p.m.avg_cost)}/call</title></circle>`;
+    if(Math.abs(p.ly-(p.cy+4))>8)s+=`<line x1="${p.cx+6}" y1="${p.cy}" x2="${p.cx+15}" y2="${p.ly-4}" stroke="${col}" opacity="0.45"/>`;
+    s+=`<text x="${p.cx+17}" y="${p.ly}" fill="var(--txt)" font-size="11">${esc(shortName(p.m.model,17))}</text>`;});
   s+='</svg>';el.innerHTML=s;
 }
 function renderAgree(){
   const ms=((AN.sum&&AN.sum.models)||[]).filter(m=>m.agreement!=null)
     .slice().sort((a,b)=>b.agreement-a.agreement);
   if(!ms.length)return noData('#chAgree','Needs ≥2 repetitions per match to measure agreement.');
-  const el=$('#chAgree');
-  const W=Math.min(560,el.clientWidth||460),padL=140,padR=64,rowH=24,H=10+ms.length*rowH+22;
+  const el=$('#chAgree'),padL=labelPad(ms.map(m=>m.model)),W=chartW(el,640),padR=58,rowH=26,H=12+ms.length*rowH+26;
   const x=v=>padL+((v||0)/100)*(W-padL-padR);
   let s=svgOpen(W,H);
   for(let t=0;t<=4;t++){const xx=x(t*25);
-    s+=`<line x1="${xx}" y1="6" x2="${xx}" y2="${H-18}" stroke="var(--border)"/>`;
-    s+=`<text x="${xx}" y="${H-5}" fill="var(--muted)" text-anchor="middle">${t*25}%</text>`;}
-  ms.forEach((m,i)=>{const cy=8+i*rowH,col=modelColor(m.model);
-    s+=`<text x="${padL-8}" y="${cy+11}" fill="var(--txt)" text-anchor="end">${esc(m.model)}</text>`;
-    s+=`<rect x="${padL}" y="${cy}" width="${Math.max(1,x(m.agreement)-padL)}" height="12" rx="2" fill="${col}"><title>${m.agreement}% of ${m.agreement_n} match-groups unanimous</title></rect>`;
-    s+=`<text x="${x(m.agreement)+6}" y="${cy+11}" fill="var(--muted)">${m.agreement}%</text>`;});
+    s+=`<line x1="${xx}" y1="8" x2="${xx}" y2="${H-22}" stroke="var(--border)"/>`;
+    s+=`<text x="${xx}" y="${H-8}" fill="var(--muted)" text-anchor="middle" font-size="11">${t*25}%</text>`;}
+  ms.forEach((m,i)=>{const cy=10+i*rowH,col=modelColor(m.model);
+    s+=`<text x="${padL-9}" y="${cy+11}" fill="var(--txt)" text-anchor="end">${esc(shortName(m.model))}<title>${esc(m.model)}</title></text>`;
+    s+=`<rect x="${padL}" y="${cy}" width="${Math.max(1,x(m.agreement)-padL)}" height="13" rx="2" fill="${col}"><title>${m.agreement}% of ${m.agreement_n} match-groups unanimous</title></rect>`;
+    s+=`<text x="${x(m.agreement)+6}" y="${cy+11}" fill="var(--muted)" font-size="11">${pct1(m.agreement)}</text>`;});
   s+='</svg>';el.innerHTML=s;
 }
 function renderOrder(){
   const ms=((AN.sum&&AN.sum.models)||[]).filter(m=>m.acc_original!=null&&m.acc_reversed!=null)
     .slice().sort((a,b)=>Math.abs(b.acc_original-b.acc_reversed)-Math.abs(a.acc_original-a.acc_reversed));
   if(!ms.length)return noData('#chOrder','Needs runs in both team orders.');
-  const el=$('#chOrder');
-  const W=Math.min(560,el.clientWidth||460),padL=140,padR=64,rowH=24,H=26+ms.length*rowH+22;
+  const el=$('#chOrder'),padL=labelPad(ms.map(m=>m.model)),W=chartW(el,640),padR=58,rowH=26,H=30+ms.length*rowH+26;
   const x=v=>padL+((v||0)/100)*(W-padL-padR);
   let s=svgOpen(W,H);
-  s+=`<circle cx="${padL}" cy="10" r="4" fill="var(--accent)"/><text x="${padL+8}" y="13" fill="var(--muted)">original</text>`;
-  s+=`<circle cx="${padL+80}" cy="10" r="4" fill="var(--warn)"/><text x="${padL+88}" y="13" fill="var(--muted)">reversed</text>`;
+  s+=`<circle cx="${padL}" cy="11" r="4.5" fill="var(--accent)"/><text x="${padL+9}" y="15" fill="var(--muted)" font-size="11">original</text>`;
+  s+=`<circle cx="${padL+86}" cy="11" r="4.5" fill="var(--warn)"/><text x="${padL+95}" y="15" fill="var(--muted)" font-size="11">reversed</text>`;
   for(let t=0;t<=4;t++){const xx=x(t*25);
-    s+=`<line x1="${xx}" y1="22" x2="${xx}" y2="${H-18}" stroke="var(--border)"/>`;
-    s+=`<text x="${xx}" y="${H-5}" fill="var(--muted)" text-anchor="middle">${t*25}%</text>`;}
-  ms.forEach((m,i)=>{const cy=32+i*rowH,xo=x(m.acc_original),xr=x(m.acc_reversed);
+    s+=`<line x1="${xx}" y1="24" x2="${xx}" y2="${H-22}" stroke="var(--border)"/>`;
+    s+=`<text x="${xx}" y="${H-8}" fill="var(--muted)" text-anchor="middle" font-size="11">${t*25}%</text>`;}
+  ms.forEach((m,i)=>{const cy=38+i*rowH,xo=x(m.acc_original),xr=x(m.acc_reversed);
     const d=m.acc_reversed-m.acc_original;
-    s+=`<text x="${padL-8}" y="${cy+4}" fill="var(--txt)" text-anchor="end">${esc(m.model)}</text>`;
+    s+=`<text x="${padL-9}" y="${cy+4}" fill="var(--txt)" text-anchor="end">${esc(shortName(m.model))}<title>${esc(m.model)}</title></text>`;
     s+=`<line x1="${xo}" y1="${cy}" x2="${xr}" y2="${cy}" stroke="var(--muted)" stroke-width="2" opacity="0.6"/>`;
-    s+=`<circle cx="${xo}" cy="${cy}" r="5" fill="var(--accent)"><title>original: ${m.acc_original}%</title></circle>`;
-    s+=`<circle cx="${xr}" cy="${cy}" r="5" fill="var(--warn)"><title>reversed: ${m.acc_reversed}%</title></circle>`;
-    s+=`<text x="${Math.max(xo,xr)+9}" y="${cy+4}" fill="${Math.abs(d)>=10?'var(--err)':'var(--muted)'}">${d>0?'+':''}${d.toFixed(0)}pp</text>`;});
+    s+=`<circle cx="${xo}" cy="${cy}" r="5.5" fill="var(--accent)"><title>original: ${m.acc_original}%</title></circle>`;
+    s+=`<circle cx="${xr}" cy="${cy}" r="5.5" fill="var(--warn)"><title>reversed: ${m.acc_reversed}%</title></circle>`;
+    s+=`<text x="${W-padR+6}" y="${cy+4}" fill="${Math.abs(d)>=10?'var(--err)':'var(--muted)'}" font-size="11">${d>0?'+':''}${d.toFixed(0)}pp</text>`;});
   s+='</svg>';el.innerHTML=s;
 }
 function renderMoment(){
@@ -1480,20 +1496,21 @@ function renderMoment(){
   const present=order.filter(mm=>ms.some(m=>m.moments&&m.moments[mm]&&m.moments[mm].acc!=null));
   if(!present.length)return noData('#chMoment');
   const rows=ms.filter(m=>present.some(mm=>m.moments[mm]&&m.moments[mm].acc!=null));
-  const W=Math.min(560,el.clientWidth||460),padL=140,padR=60,barH=10,gap=3;
-  const rowH=present.length*(barH+gap)+8,H=24+rows.length*rowH+22;
+  const padL=labelPad(rows.map(m=>m.model)),W=chartW(el,640),padR=52,barH=10,gap=3;
+  const rowH=present.length*(barH+gap)+9,H=28+rows.length*rowH+26;
   const x=v=>padL+((v||0)/100)*(W-padL-padR);
-  let s=svgOpen(W,H),lx=padL;
-  present.forEach(mm=>{s+=`<rect x="${lx}" y="4" width="9" height="9" rx="2" fill="${MOMENT_COLORS[mm]}"/><text x="${lx+13}" y="12" fill="var(--muted)">${mm}</text>`;lx+=mm.length*6.4+34;});
+  let s=svgOpen(W,H);
+  present.forEach((mm,j)=>{const lx=padL+j*95;
+    s+=`<rect x="${lx}" y="5" width="9" height="9" rx="2" fill="${MOMENT_COLORS[mm]}"/><text x="${lx+13}" y="13" fill="var(--muted)" font-size="11">${mm.replace('_match','').replace('_','')}</text>`;});
   for(let t=0;t<=4;t++){const xx=x(t*25);
-    s+=`<line x1="${xx}" y1="20" x2="${xx}" y2="${H-18}" stroke="var(--border)"/>`;
-    s+=`<text x="${xx}" y="${H-5}" fill="var(--muted)" text-anchor="middle">${t*25}%</text>`;}
-  rows.forEach((m,i)=>{const top=26+i*rowH;
-    s+=`<text x="${padL-8}" y="${top+rowH/2}" fill="var(--txt)" text-anchor="end">${esc(m.model)}</text>`;
+    s+=`<line x1="${xx}" y1="22" x2="${xx}" y2="${H-22}" stroke="var(--border)"/>`;
+    s+=`<text x="${xx}" y="${H-8}" fill="var(--muted)" text-anchor="middle" font-size="11">${t*25}%</text>`;}
+  rows.forEach((m,i)=>{const top=30+i*rowH;
+    s+=`<text x="${padL-9}" y="${top+rowH/2-2}" fill="var(--txt)" text-anchor="end">${esc(shortName(m.model))}<title>${esc(m.model)}</title></text>`;
     present.forEach((mm,j)=>{const info=m.moments[mm];if(!info||info.acc==null)return;
       const cy=top+j*(barH+gap);
       s+=`<rect x="${padL}" y="${cy}" width="${Math.max(1,x(info.acc)-padL)}" height="${barH}" rx="2" fill="${MOMENT_COLORS[mm]}"><title>${mm}: ${info.acc}% (n=${info.n})</title></rect>`;
-      s+=`<text x="${x(info.acc)+5}" y="${cy+9}" fill="var(--muted)">${info.acc}%</text>`;});});
+      s+=`<text x="${x(info.acc)+5}" y="${cy+9}" fill="var(--muted)" font-size="10">${pct1(info.acc)}</text>`;});});
   s+='</svg>';el.innerHTML=s;
 }
 function renderCalibSel(){
@@ -1509,13 +1526,13 @@ function renderCalib(){
   const key=$('#calibModel').value||'pooled';
   const pts=(cal[key]||[]).slice().sort((a,b)=>a.p-b.p);
   if(!pts.length)return noData('#chCalib','No probability predictions under this filter (needs probability / six-hats prompts).');
-  const W=Math.min(520,el.clientWidth||440),H=300,padL=40,padR=12,padT=10,padB=30;
+  const W=chartW(el,560),H=320,padL=44,padR=14,padT=12,padB=32;
   const x=p=>padL+p*(W-padL-padR),y=p=>padT+(1-p)*(H-padT-padB);
   let s=svgOpen(W,H);
   for(let t=0;t<=4;t++){const p=t/4;
     s+=`<line x1="${x(0)}" y1="${y(p)}" x2="${x(1)}" y2="${y(p)}" stroke="var(--border)"/>`;
-    s+=`<text x="${padL-5}" y="${y(p)+3}" fill="var(--muted)" text-anchor="end">${(p*100)|0}%</text>`;
-    s+=`<text x="${x(p)}" y="${H-6}" fill="var(--muted)" text-anchor="middle">${(p*100)|0}%</text>`;}
+    s+=`<text x="${padL-5}" y="${y(p)+4}" fill="var(--muted)" text-anchor="end" font-size="11">${(p*100)|0}%</text>`;
+    s+=`<text x="${x(p)}" y="${H-8}" fill="var(--muted)" text-anchor="middle" font-size="11">${(p*100)|0}%</text>`;}
   s+=`<line x1="${x(0)}" y1="${y(0)}" x2="${x(1)}" y2="${y(1)}" stroke="var(--muted)" stroke-dasharray="4 4"/>`;
   const col=key==='pooled'?'var(--accent)':modelColor(key);
   let d='';pts.forEach((b,i)=>{d+=(i?'L':'M')+x(b.p).toFixed(1)+' '+y(b.obs).toFixed(1)+' ';});
@@ -1532,7 +1549,7 @@ function renderHeat(){
     const done=cells.filter(v=>v!=null);
     return {m,cells,acc:done.length?done.reduce((a,b)=>a+b,0)/done.length:0,n:done.length};
   }).sort((a,b)=>b.acc-a.acc);
-  const cell=16,padL=150,padT=20,W=padL+hm.matches.length*cell+70,H=padT+rows.length*cell+8;
+  const cell=16,padL=labelPad(rows.map(r=>r.m)),padT=20,W=padL+hm.matches.length*cell+70,H=padT+rows.length*cell+8;
   let s=`<svg width="${W}" height="${H}" style="font:10px system-ui">`;
   hm.matches.forEach((mt,j)=>{if(j===0||(j+1)%5===0)
     s+=`<text x="${padL+j*cell+cell/2}" y="${padT-6}" fill="var(--muted)" text-anchor="middle">${j+1}</text>`;});
@@ -1554,21 +1571,27 @@ function renderBox(){
   groups.forEach(g=>{const b=g.b;lo=Math.min(lo,b.whislo,...(b.outliers||[]));hi=Math.max(hi,b.whishi,...(b.outliers||[]));});
   if(!(hi>lo))hi=lo+1;
   groups.sort((a,b)=>a.b.med-b.b.med);
-  const rowH=24,padL=230,padR=24,padT=24,W=Math.min(920,(wrap.clientWidth||840)),H=padT+groups.length*rowH+22;
+  // Label depends on grouping: model×prompt, model-only or prompt-only.
+  groups.forEach(g=>{const pShort=g.prompt.replace('-prediction','');
+    if(g.model==='all models')g.lab=pShort;
+    else if(g.prompt==='all')g.lab=shortName(g.model);
+    else g.lab=shortName(g.model,16)+' · '+pShort;});
+  const padL=labelPad(groups.map(g=>g.lab))+42,W=chartW(wrap,980),padR=28,padT=26,rowH=26,H=padT+groups.length*rowH+26;
   const x=v=>padL+(v-lo)/(hi-lo)*(W-padL-padR);
-  let s=`<svg viewBox="0 0 ${W} ${H}" width="100%" style="font:11px system-ui">`;
+  let s=svgOpen(W,H);
   for(let t=0;t<=4;t++){const v=lo+(hi-lo)*t/4,xx=x(v);
-    s+=`<line x1="${xx}" y1="${padT-6}" x2="${xx}" y2="${H-18}" stroke="var(--border)"/>`;
-    s+=`<text x="${xx}" y="${H-5}" fill="var(--muted)" text-anchor="middle">${v.toFixed(2)}</text>`;}
-  groups.forEach((g,i)=>{const cy=padT+i*rowH+rowH/2,b=g.b,col=pcolor(g.prompt);
+    s+=`<line x1="${xx}" y1="${padT-8}" x2="${xx}" y2="${H-22}" stroke="var(--border)"/>`;
+    s+=`<text x="${xx}" y="${H-8}" fill="var(--muted)" text-anchor="middle" font-size="11">${v.toFixed(2)}</text>`;}
+  groups.forEach((g,i)=>{const cy=padT+i*rowH+rowH/2-2,b=g.b;
+    const col=(g.prompt!=='all')?pcolor(g.prompt):modelColor(g.model);
+    const tip=`median ${b.med.toFixed(2)} · IQR ${b.q1.toFixed(2)}–${b.q3.toFixed(2)} · n=${b.n}`;
     s+=`<line x1="${x(b.whislo)}" y1="${cy}" x2="${x(b.whishi)}" y2="${cy}" stroke="var(--muted)"/>`;
     s+=`<line x1="${x(b.whislo)}" y1="${cy-5}" x2="${x(b.whislo)}" y2="${cy+5}" stroke="var(--muted)"/>`;
     s+=`<line x1="${x(b.whishi)}" y1="${cy-5}" x2="${x(b.whishi)}" y2="${cy+5}" stroke="var(--muted)"/>`;
-    s+=`<rect x="${x(b.q1)}" y="${cy-8}" width="${Math.max(1,x(b.q3)-x(b.q1))}" height="16" fill="${col}22" stroke="${col}" stroke-width="1.5"/>`;
-    s+=`<line x1="${x(b.med)}" y1="${cy-8}" x2="${x(b.med)}" y2="${cy+8}" stroke="${col}" stroke-width="2"/>`;
-    (b.outliers||[]).forEach(o=>{s+=`<circle cx="${x(o)}" cy="${cy}" r="2" fill="var(--err)" opacity="0.55"/>`;});
-    s+=`<title></title>`;
-    s+=`<text x="${padL-8}" y="${cy+3}" fill="var(--txt)" text-anchor="end">${esc(g.model)} · <tspan fill="${col}">${esc(g.prompt.replace('-prediction',''))}</tspan> <tspan fill="var(--muted)">n=${b.n}</tspan></text>`;});
+    s+=`<rect x="${x(b.q1)}" y="${cy-8}" width="${Math.max(1.5,x(b.q3)-x(b.q1))}" height="16" fill="${col}22" stroke="${col}" stroke-width="1.5"><title>${tip}</title></rect>`;
+    s+=`<line x1="${x(b.med)}" y1="${cy-8}" x2="${x(b.med)}" y2="${cy+8}" stroke="${col}" stroke-width="2.5"/>`;
+    (b.outliers||[]).forEach(o=>{s+=`<circle cx="${x(o)}" cy="${cy}" r="2.2" fill="var(--err)" opacity="0.55"><title>outlier: ${o}</title></circle>`;});
+    s+=`<text x="${padL-9}" y="${cy+4}" fill="var(--txt)" text-anchor="end">${esc(g.lab)} <tspan fill="var(--muted)" font-size="10.5">n=${b.n}</tspan><title>${esc(g.model)} · ${esc(g.prompt)}</title></text>`;});
   s+='</svg>';wrap.innerHTML=s;
 }
 
@@ -1590,12 +1613,13 @@ function renderRace(){
 }
 function drawRace(){
   const {data,models,N,k}=RACE;
-  const W=760,H=340,padL=42,padR=12,padT=14,padB=24;
+  const box=$('#raceSvg');
+  const W=Math.max(420,Math.min(920,(box&&box.clientWidth)||700)),H=360,padL=46,padR=14,padT=14,padB=28;
   const x=i=>padL+(N<=1?0:(i-1)/(N-1))*(W-padL-padR), y=a=>padT+(1-a)*(H-padT-padB);
-  let s=`<svg viewBox="0 0 ${W} ${H}" width="100%" style="font:11px system-ui">`;
+  let s=svgOpen(W,H);
   for(let t=0;t<=4;t++){const a=t/4,yy=y(a);
     s+=`<line x1="${padL}" y1="${yy}" x2="${W-padR}" y2="${yy}" stroke="var(--border)"/>`;
-    s+=`<text x="${padL-6}" y="${yy+3}" fill="var(--muted)" text-anchor="end">${(a*100)|0}%</text>`;}
+    s+=`<text x="${padL-6}" y="${yy+4}" fill="var(--muted)" text-anchor="end" font-size="11">${(a*100)|0}%</text>`;}
   s+=`<line x1="${x(k)}" y1="${padT}" x2="${x(k)}" y2="${H-padB}" stroke="var(--accent)" stroke-dasharray="3 3" opacity="0.6"/>`;
   const rank=[];
   models.forEach((m,mi)=>{const pts=data.series[m],col=MODEL_COLOR[m]||(data.series_by==='prompt_id'?pcolor(m):PALETTE[mi%PALETTE.length]);
@@ -1628,6 +1652,13 @@ $('#boxMetric').onchange=renderBox;
 $('#boxGroup').onchange=loadBoxOnly;
 $('#raceSeries').onchange=loadRaceOnly;
 $('#calibModel').onchange=renderCalib;
+let _anRz=null;
+window.addEventListener('resize',()=>{clearTimeout(_anRz);_anRz=setTimeout(()=>{
+  if($('#t-analytics').classList.contains('hide'))return;
+  if(AN.sum){renderLeader();renderPrompts();renderCost();renderAgree();renderOrder();renderMoment();renderCalib();renderUsage();renderHeat();}
+  if(ANALYTICS.box)renderBox();
+  if(RACE)drawRace();
+},200);});
 
 function renderKpis(s){
   const k=$('#kpis');
