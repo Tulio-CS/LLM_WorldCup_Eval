@@ -348,8 +348,13 @@ _NO_EVAL = "No finished results joined to valid predictions yet — ingest resul
 
 
 @app.get("/api/metrics/box")
-def api_metrics_box(moment: str = "all", _: None = Depends(require_view)) -> JSONResponse:
-    """Five-number summaries (Tukey box + outliers) per model×prompt, per metric."""
+def api_metrics_box(
+    moment: str = "all", prompt: str = "split", _: None = Depends(require_view)
+) -> JSONResponse:
+    """Five-number summaries (Tukey box + outliers) per group, per metric.
+
+    ``prompt``: "split" = one box per model×prompt (default); "agg" = one box per
+    model pooling all prompts; or a specific prompt_id to keep only that one."""
     import numpy as np
     import pandas as pd
 
@@ -358,6 +363,12 @@ def api_metrics_box(moment: str = "all", _: None = Depends(require_view)) -> JSO
         return JSONResponse({"groups": [], "metrics": _BOX_METRICS, "note": _NO_EVAL})
     if moment and moment != "all" and "match_moment" in df.columns:
         df = df[df["match_moment"] == moment]
+    if prompt not in ("split", "agg", "all", ""):
+        df = df[df["prompt_id"] == prompt]
+    if df.empty:
+        return JSONResponse(
+            {"groups": [], "metrics": _BOX_METRICS, "note": "No predictions match this filter."}
+        )
 
     def box(vals) -> dict | None:
         v = pd.to_numeric(vals, errors="coerce").dropna().to_numpy()
@@ -376,23 +387,34 @@ def api_metrics_box(moment: str = "all", _: None = Depends(require_view)) -> JSO
             "outliers": outl[:60],
         }
 
+    by = ["model"] if prompt == "agg" else ["model", "prompt_id"]
     groups = []
-    for (model, prompt), g in df.groupby(["model", "prompt_id"], dropna=False):
-        entry = {"model": str(model), "prompt_id": str(prompt), "n": int(len(g))}
+    for keys, g in df.groupby(by, dropna=False):
+        kv = dict(zip(by, keys if isinstance(keys, tuple) else (keys,)))
+        entry = {
+            "model": str(kv["model"]),
+            "prompt_id": str(kv.get("prompt_id", "all")),
+            "n": int(len(g)),
+        }
         for m in _BOX_METRICS:
             entry[m] = box(g[m]) if m in g.columns else None
         groups.append(entry)
     groups.sort(key=lambda e: (e["model"], e["prompt_id"]))
-    return JSONResponse({"groups": groups, "metrics": _BOX_METRICS, "moment": moment, "note": ""})
+    return JSONResponse(
+        {"groups": groups, "metrics": _BOX_METRICS, "moment": moment, "prompt": prompt, "note": ""}
+    )
 
 
 @app.get("/api/race")
-def api_race(moment: str = "pre_match", _: None = Depends(require_view)) -> JSONResponse:
+def api_race(
+    moment: str = "pre_match", prompt: str = "all", _: None = Depends(require_view)
+) -> JSONResponse:
     """Cumulative outcome accuracy per model across matches ordered by kickoff.
 
     For each match the model's modal predicted winner is scored against the actual
     outcome; the series is the running fraction correct (step-carried across matches
-    the model didn't cover)."""
+    the model didn't cover). ``prompt``: "all" pools every prompt into the modal
+    vote; a specific prompt_id restricts the vote to that prompt."""
     from collections import Counter
 
     import pandas as pd
@@ -403,6 +425,12 @@ def api_race(moment: str = "pre_match", _: None = Depends(require_view)) -> JSON
     if moment and moment != "all" and "match_moment" in df.columns:
         sub = df[df["match_moment"] == moment]
         df = sub if not sub.empty else df
+    if prompt not in ("all", "agg", ""):
+        df = df[df["prompt_id"] == prompt]
+    if df.empty:
+        return JSONResponse(
+            {"labels": [], "series": {}, "note": "No predictions match this filter."}
+        )
 
     order = (
         df.groupby("match_id")["kickoff_datetime"].min().sort_values().index.tolist()
@@ -441,7 +469,9 @@ def api_race(moment: str = "pre_match", _: None = Depends(require_view)) -> JSON
             else:
                 pts.append({"acc": round(last, 4) if last is not None else None, "c": None})
         series[model] = pts
-    return JSONResponse({"labels": labels, "series": series, "moment": moment, "note": ""})
+    return JSONResponse(
+        {"labels": labels, "series": series, "moment": moment, "prompt": prompt, "note": ""}
+    )
 
 
 _FORECAST_COLS = [
@@ -922,6 +952,7 @@ tr:hover td{background:#0e1726}
           <option value="total_goals_error">Total-goals error</option>
           <option value="brier">Brier (probability prompts)</option>
         </select></div>
+        <div><label>Prompt</label><select id="boxPrompt"></select></div>
         <div><label>Moment</label><select id="anMoment">
           <option value="all">all</option><option value="pre_match">pre_match</option>
           <option value="halftime">halftime</option><option value="post_match">post_match</option>
@@ -934,6 +965,7 @@ tr:hover td{background:#0e1726}
     <div class="panel">
       <h2>Accuracy race — cumulative outcome accuracy over time</h2>
       <div class="row">
+        <div><label>Prompt</label><select id="racePrompt"></select></div>
         <div><label>Moment</label><select id="raceMoment">
           <option value="pre_match">pre_match</option><option value="all">all</option>
           <option value="halftime">halftime</option><option value="post_match">post_match</option>
@@ -997,17 +1029,25 @@ function tab(name){
 $$('.tab').forEach(t=>t.onclick=()=>tab(t.dataset.tab));
 
 // ---- Analytics: boxplots + accuracy race -------------------------------
+function fillPromptSelects(){
+  const ps=(BOOT&&BOOT.prompts)||[];
+  const opts=ps.map(p=>`<option value="${esc(p)}">${esc(p.replace('-prediction',''))}</option>`).join('');
+  const box=$('#boxPrompt');
+  if(box&&!box.dataset.filled){box.innerHTML='<option value="split">Per prompt (split)</option><option value="agg">All prompts (aggregated)</option>'+opts;box.dataset.filled='1';}
+  const race=$('#racePrompt');
+  if(race&&!race.dataset.filled){race.innerHTML='<option value="all">All prompts</option>'+opts;race.dataset.filled='1';}
+}
 async function loadAnalyticsBox(){
-  try{const m=$('#anMoment').value||'all';
-    ANALYTICS.box=await api('./api/metrics/box?moment='+encodeURIComponent(m));renderBox();}
+  try{const m=$('#anMoment').value||'all', p=($('#boxPrompt')&&$('#boxPrompt').value)||'split';
+    ANALYTICS.box=await api(`./api/metrics/box?moment=${encodeURIComponent(m)}&prompt=${encodeURIComponent(p)}`);renderBox();}
   catch(e){$('#boxWrap').innerHTML='<div class="small muted">Error: '+esc(e.message)+'</div>';}
 }
 async function loadAnalyticsRace(){
-  try{const m=$('#raceMoment').value||'pre_match';
-    ANALYTICS.race=await api('./api/race?moment='+encodeURIComponent(m));renderRace();}
+  try{const m=$('#raceMoment').value||'pre_match', p=($('#racePrompt')&&$('#racePrompt').value)||'all';
+    ANALYTICS.race=await api(`./api/race?moment=${encodeURIComponent(m)}&prompt=${encodeURIComponent(p)}`);renderRace();}
   catch(e){$('#raceWrap').innerHTML='<div class="small muted">Error: '+esc(e.message)+'</div>';}
 }
-function loadAnalytics(){loadAnalyticsBox();loadAnalyticsRace();}
+function loadAnalytics(){fillPromptSelects();loadAnalyticsBox();loadAnalyticsRace();}
 
 function renderBox(){
   const data=ANALYTICS.box, wrap=$('#boxWrap'); if(!data){return;}
@@ -1086,8 +1126,10 @@ function toggleRacePlay(){const btn=$('#racePlay');
     if(RACE.k>=RACE.N){clearInterval(RACE.timer);RACE.timer=null;btn.textContent='▶ Play';}},260);
 }
 $('#boxMetric').onchange=renderBox;
+$('#boxPrompt').onchange=loadAnalyticsBox;
 $('#anMoment').onchange=loadAnalyticsBox;
 $('#boxReload').onclick=loadAnalyticsBox;
+$('#racePrompt').onchange=loadAnalyticsRace;
 $('#raceMoment').onchange=loadAnalyticsRace;
 $('#raceReload').onclick=loadAnalyticsRace;
 
