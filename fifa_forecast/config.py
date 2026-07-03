@@ -145,20 +145,28 @@ DEFAULT_MODELS: list[dict[str, Any]] = [
         "pricing": {"input": 1.0, "output": 5.0},
     },
     # ---- Google Gemini ----------------------------------------------------
+    # Cost notes: reasoning ("thinking") tokens are billed at the OUTPUT rate
+    # and dominate Gemini spend — capped via params.thinking_budget below.
+    # Free-tier option: an AI Studio free-tier key also works here (swap the
+    # key stored in GEMINI_API_KEY, or point api_key_env at another var). Free
+    # tier has low rate limits and Google may use free-tier data for training —
+    # verify both before relying on it for publishable research.
+    # Batch option: `python -m fifa_forecast gemini-batch` runs the same plan
+    # through Google's Batch API at 50% of interactive pricing (pre-match only;
+    # completion is asynchronous, usually minutes-hours, guaranteed <24h).
     {
         "key": "gemini-2.5-pro",
         "provider": "gemini",
         "model_id": "gemini-2.5-pro",
         "enabled": True,
         "api_key_env": "GEMINI_API_KEY",
-        # thinking_budget caps reasoning tokens (billed as output). 512 is a
-        # balance: real reasoning room without the dynamic blow-up (~1.2k/call).
-        # Pro can't fully disable thinking (min 128); Flash left on dynamic.
+        # thinking_budget caps reasoning tokens (billed as output). 128 is
+        # Pro's minimum (it can't fully disable thinking) — cheapest setting.
         "params": {
             "temperature": 1.0,
             "top_p": 0.95,
             "max_output_tokens": 8000,
-            "thinking_budget": 512,
+            "thinking_budget": 128,
         },
         "pricing": {"input": 1.25, "output": 10.0},  # ESTIMATE — verify
     },
@@ -168,8 +176,26 @@ DEFAULT_MODELS: list[dict[str, Any]] = [
         "model_id": "gemini-2.5-flash",
         "enabled": True,
         "api_key_env": "GEMINI_API_KEY",
-        "params": {"temperature": 1.0, "top_p": 0.95, "max_output_tokens": 8000},
+        # thinking_budget=512 caps Flash's dynamic thinking (~950 tok/call
+        # measured) while keeping reasoning room; 0 would disable entirely.
+        "params": {
+            "temperature": 1.0,
+            "top_p": 0.95,
+            "max_output_tokens": 8000,
+            "thinking_budget": 512,
+        },
         "pricing": {"input": 0.30, "output": 2.50},  # ESTIMATE — verify
+    },
+    {
+        "key": "gemini-2.5-flash-lite",
+        "provider": "gemini",
+        "model_id": "gemini-2.5-flash-lite",
+        "enabled": True,
+        "api_key_env": "GEMINI_API_KEY",
+        # Cheapest Gemini tier (~6x cheaper than Flash); thinking is off by
+        # default on flash-lite, so no thinking_budget needed.
+        "params": {"temperature": 1.0, "top_p": 0.95, "max_output_tokens": 8000},
+        "pricing": {"input": 0.10, "output": 0.40},  # ESTIMATE — verify
     },
     # ---- xAI Grok (OpenAI-compatible API) ---------------------------------
     {
@@ -250,7 +276,8 @@ _REPS_PER_MODEL: dict[str, int] = {
     "gpt-5": 5, "gpt-5-mini": 5, "gpt-5-nano": 5,
     # Claude reps cut to 1 to reduce spend (six-hats output is ~85% of cost).
     "claude-opus": 1, "claude-sonnet": 1, "claude-haiku": 1,
-    "gemini-2.5-pro": 2, "gemini-2.5-flash": 2,
+    # Gemini reps cut to 1 to reduce spend (thinking tokens dominate its cost).
+    "gemini-2.5-pro": 1, "gemini-2.5-flash": 1, "gemini-2.5-flash-lite": 1,
     "grok": 5,
     # Local models are free but CPU-slow — keep reps modest (raise freely).
     "qwen-local": 2, "mistral-local": 2, "gemma-local": 2,

@@ -239,6 +239,55 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-export", action="store_true", help="Skip rebuilding the Excel workbook."
     )
 
+    p_gb = sub.add_parser(
+        "gemini-batch",
+        help="Run pending Gemini executions through Google's Batch API "
+        "(50%% of interactive pricing; async, <24h — pre-match use only).",
+    )
+    _add_common(p_gb)
+    p_gb.add_argument(
+        "--date", action="append", default=None, metavar="YYYY-MM-DD",
+        help="Only matches kicking off on this local (UTC-3) date. Repeatable.",
+    )
+    p_gb.add_argument(
+        "--match-id", action="append", default=None,
+        help="Only these match ids. Repeatable.",
+    )
+    p_gb.add_argument(
+        "--moment", action="append", default=None,
+        choices=["pre_match", "halftime", "post_match"],
+        help="Forecast moment(s). Default: config match_moments.",
+    )
+    p_gb.add_argument(
+        "--model", action="append", default=None,
+        help="Gemini model key(s), e.g. gemini-2.5-pro. Default: all gemini models.",
+    )
+    p_gb.add_argument(
+        "--reps", type=int, default=None,
+        help="Override repetitions (default: each model's config reps).",
+    )
+    p_gb.add_argument(
+        "--retry-errors", action="store_true",
+        help="Also resubmit combinations that previously errored.",
+    )
+    p_gb.add_argument(
+        "--no-wait", action="store_true",
+        help="Submit and exit; collect later with --collect <state file>.",
+    )
+    p_gb.add_argument(
+        "--collect", default=None, metavar="STATE.json",
+        help="Resume: wait for + collect a previously submitted batch.",
+    )
+    p_gb.add_argument("--poll-interval", type=int, default=60, help="Seconds between polls.")
+    p_gb.add_argument(
+        "--timeout", type=int, default=86400,
+        help="Max seconds to wait for a job (default 24h).",
+    )
+    p_gb.add_argument(
+        "--no-export", action="store_true",
+        help="Skip rebuilding the Excel workbook after collection.",
+    )
+
     p_merge = sub.add_parser(
         "merge",
         help="Merge forecast rows from one or more other SQLite DBs into this one "
@@ -436,6 +485,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not args.no_excel and ev.tables:
             path = write_evaluation_excel(ev, args.out)
             print(f"\nEvaluation workbook written: {path}")
+        return 0
+
+    if command == "gemini-batch":
+        from .batch_gemini import collect_from_state, run_batch
+
+        if args.collect:
+            stats = collect_from_state(
+                config, args.collect,
+                poll_interval=args.poll_interval, timeout=args.timeout,
+            )
+        else:
+            stats = run_batch(
+                config,
+                dates=args.date, match_ids=args.match_id, moments=args.moment,
+                model_keys=args.model, reps=args.reps, retry_errors=args.retry_errors,
+                wait_for_results=not args.no_wait,
+                poll_interval=args.poll_interval, timeout=args.timeout,
+            )
+        print(f"Batch done: {stats}")
+        collected = stats.get("success", 0) or stats.get("error", 0)
+        if collected and not args.no_export:
+            path = export_workbook(config)
+            print(f"Workbook written: {path}")
         return 0
 
     if command == "merge":
