@@ -474,6 +474,131 @@ def api_race(
     )
 
 
+@app.get("/api/analytics")
+def api_analytics(
+    moment: str = "all", prompt: str = "all", _: None = Depends(require_view)
+) -> JSONResponse:
+    """One-shot dataset for the Analytics tab: per-model aggregates (accuracy,
+    order sensitivity, per-moment accuracy, rep agreement, avg cost), calibration
+    bins for probability prompts, and a model×match correctness grid."""
+    from collections import Counter
+
+    import numpy as np
+    import pandas as pd
+
+    df = _eval_frame()
+    if df is None or df.empty:
+        return JSONResponse({"models": [], "calibration": {}, "heatmap": None, "note": _NO_EVAL})
+    if moment and moment != "all" and "match_moment" in df.columns:
+        df = df[df["match_moment"] == moment]
+    if prompt not in ("all", "agg", "split", ""):
+        df = df[df["prompt_id"] == prompt]
+    if df.empty:
+        return JSONResponse({"models": [], "calibration": {}, "heatmap": None,
+                             "note": "No predictions match this filter."})
+
+    def pct(series) -> float | None:
+        s = pd.to_numeric(series, errors="coerce").dropna()
+        return round(float(s.mean()) * 100, 1) if len(s) else None
+
+    models_out: list[dict[str, Any]] = []
+    for model, g in df.groupby("model"):
+        cost = pd.to_numeric(g["api_cost"], errors="coerce").dropna()
+        brier = g["brier"].dropna()
+        gd = pd.to_numeric(g["abs_goal_diff_error"], errors="coerce").dropna()
+        entry: dict[str, Any] = {
+            "model": str(model),
+            "n": int(len(g)),
+            "outcome_acc": pct(g["outcome_correct"]),
+            "exact_acc": pct(g["exact_score_correct"]),
+            "gd_err": round(float(gd.mean()), 3) if len(gd) else None,
+            "brier": round(float(brier.mean()), 4) if len(brier) else None,
+            "avg_cost": round(float(cost.mean()), 6) if len(cost) else None,
+        }
+        for order in ("original", "reversed"):
+            sub = g[g["team_order_type"] == order]
+            entry[f"acc_{order}"] = pct(sub["outcome_correct"])
+        entry["moments"] = {
+            str(mm): {"acc": pct(gm["outcome_correct"]), "n": int(len(gm))}
+            for mm, gm in g.groupby("match_moment")
+        }
+        # Rep agreement: within each (match, moment), do all reps pick one winner?
+        agree = [
+            1 if gg["pred_outcome"].nunique() == 1 else 0
+            for _k, gg in g.groupby(["match_id", "match_moment"], dropna=False)
+            if len(gg) >= 2
+        ]
+        entry["agreement"] = round(100 * sum(agree) / len(agree), 1) if agree else None
+        entry["agreement_n"] = len(agree)
+        models_out.append(entry)
+    models_out.sort(key=lambda e: -(e["outcome_acc"] or 0))
+
+    # Calibration: each prediction contributes its 3 normalized outcome
+    # probabilities as (predicted p, outcome happened) pairs, binned per decile.
+    calibration: dict[str, list] = {}
+    p1 = pd.to_numeric(df["pc_team1"], errors="coerce")
+    pdr = pd.to_numeric(df["pc_draw"], errors="coerce")
+    p2 = pd.to_numeric(df["pc_team2"], errors="coerce")
+    psum = p1 + pdr + p2
+    cmask = psum.notna() & (psum > 0)
+    if cmask.any():
+        cdf = df[cmask]
+        ps = psum[cmask]
+        parts = []
+        for col, out in (("pc_team1", "team_1"), ("pc_draw", "draw"), ("pc_team2", "team_2")):
+            parts.append(pd.DataFrame({
+                "model": cdf["model"],
+                "p": pd.to_numeric(cdf[col], errors="coerce") / ps,
+                "hit": (cdf["actual_outcome"] == out).astype(float),
+            }))
+        allp = pd.concat(parts).dropna(subset=["p"])
+        if not allp.empty:
+            allp["bin"] = np.clip((allp["p"] * 10).astype(int), 0, 9)
+
+            def bins(dd: pd.DataFrame) -> list[dict[str, Any]]:
+                return [
+                    {"p": round(float(gg["p"].mean()), 3),
+                     "obs": round(float(gg["hit"].mean()), 3),
+                     "n": int(len(gg))}
+                    for _b, gg in dd.groupby("bin")
+                ]
+
+            calibration["pooled"] = bins(allp)
+            for m, gg in allp.groupby("model"):
+                calibration[str(m)] = bins(gg)
+
+    # Heatmap: modal-winner correctness per model × match, kickoff order.
+    order_ids = df.groupby("match_id")["kickoff_datetime"].min().sort_values().index.tolist()
+    hm_matches = []
+    for mid in order_ids:
+        g = df[df["match_id"] == mid]
+        r = g.iloc[0]
+        a1 = pd.to_numeric(g["actual_c1"], errors="coerce").dropna()
+        a2 = pd.to_numeric(g["actual_c2"], errors="coerce").dropna()
+        hm_matches.append({
+            "match_id": str(mid),
+            "name": f"{r['team_1']} v {r['team_2']}",
+            "date": str(r.get("kickoff_datetime") or "")[:10],
+            "actual": f"{int(a1.iloc[0])}-{int(a2.iloc[0])}" if len(a1) and len(a2) else None,
+        })
+    hm_rows: dict[str, list] = {}
+    for model, md in df.groupby("model"):
+        per: dict[Any, int] = {}
+        for mid, gg in md.groupby("match_id"):
+            outs = [o for o in gg["pred_outcome"].tolist() if isinstance(o, str)]
+            if outs:
+                modal = Counter(outs).most_common(1)[0][0]
+                per[mid] = int(modal == gg["actual_outcome"].iloc[0])
+        hm_rows[str(model)] = [per.get(mid) for mid in order_ids]
+
+    return JSONResponse(_jsonable({
+        "models": models_out,
+        "calibration": calibration,
+        "heatmap": {"matches": hm_matches, "rows": hm_rows},
+        "moment": moment, "prompt": prompt, "note": "",
+    }))
+
+
 _FORECAST_COLS = [
     "run_id", "match_id", "team_1", "team_2", "provider", "model", "prompt_id",
     "match_moment", "team_order_type", "repetition_number",
@@ -945,35 +1070,73 @@ tr:hover td{background:#0e1726}
   <!-- ANALYTICS -->
   <section id="t-analytics" class="hide">
     <div class="panel">
-      <h2>Metric distributions — boxplots by model &amp; prompt</h2>
+      <h2>Analytics — model performance on finished matches</h2>
+      <div class="row">
+        <div><label>Prompt</label><select id="anPrompt"></select></div>
+        <div><label>Moment</label><select id="anMomentG">
+          <option value="all">all</option><option value="pre_match">pre_match</option>
+          <option value="halftime">halftime</option><option value="post_match">post_match</option>
+        </select></div>
+        <div style="align-self:end"><button class="btn ghost" id="anReload">Reload</button></div>
+      </div>
+      <p class="small muted">Filters apply to every chart below. Predictions are mapped to canonical
+        team order; only finished matches with ingested results count. <span id="anNote"></span></p>
+    </div>
+
+    <div class="panel">
+      <h2>Leaderboard — outcome &amp; exact-score accuracy</h2>
+      <p class="small muted">Solid bar = picked the right winner/draw; thin bar = nailed the exact scoreline. Sorted by outcome accuracy.</p>
+      <div id="chLeader"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Accuracy race — cumulative outcome accuracy over time</h2>
+      <p class="small muted">Matches ordered by kickoff; each match scores the model's modal predicted winner. Hit play to watch the ranking evolve.</p>
+      <div id="raceWrap"></div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:14px">
+      <div class="panel"><h2>Cost vs accuracy</h2>
+        <p class="small muted">Avg API cost per call (√ scale) vs outcome accuracy — up-left is the value corner. Free local models sit on the axis.</p>
+        <div id="chCost"></div></div>
+      <div class="panel"><h2>Rep consistency</h2>
+        <p class="small muted">How often all repetitions of a match agree on the winner — higher = more deterministic model.</p>
+        <div id="chAgree"></div></div>
+      <div class="panel"><h2>Team-order sensitivity</h2>
+        <p class="small muted">Accuracy with teams presented in original vs reversed order. A wide gap = the model is biased by presentation order.</p>
+        <div id="chOrder"></div></div>
+      <div class="panel"><h2>Accuracy by moment</h2>
+        <p class="small muted">Does in-game information (halftime / post-match) actually improve the forecast?</p>
+        <div id="chMoment"></div></div>
+    </div>
+
+    <div class="panel">
+      <h2>Calibration — predicted probability vs reality</h2>
+      <div class="row"><div><label>Model</label><select id="calibModel"></select></div></div>
+      <p class="small muted">Probability prompts only. Each prediction contributes its three outcome
+        probabilities; a well-calibrated model hugs the diagonal. Dot size = sample count.</p>
+      <div id="chCalib"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Metric distributions — boxplots</h2>
       <div class="row">
         <div><label>Metric</label><select id="boxMetric">
           <option value="abs_goal_diff_error">Goal-difference error</option>
           <option value="total_goals_error">Total-goals error</option>
           <option value="brier">Brier (probability prompts)</option>
         </select></div>
-        <div><label>Prompt</label><select id="boxPrompt"></select></div>
-        <div><label>Moment</label><select id="anMoment">
-          <option value="all">all</option><option value="pre_match">pre_match</option>
-          <option value="halftime">halftime</option><option value="post_match">post_match</option>
-        </select></div>
-        <div style="align-self:end"><button class="btn ghost" id="boxReload">Reload</button></div>
+        <div style="align-self:end"><label class="small"><input type="checkbox" id="boxSplit" checked> split by prompt</label></div>
       </div>
-      <p class="small muted">One box per model×prompt over finished matches (all reps/orders, canonical order). Lower is better; red dots are outliers.</p>
+      <p class="small muted">Lower is better; red dots are outliers.</p>
       <div id="boxWrap" class="tablewrap"></div>
     </div>
+
     <div class="panel">
-      <h2>Accuracy race — cumulative outcome accuracy over time</h2>
-      <div class="row">
-        <div><label>Prompt</label><select id="racePrompt"></select></div>
-        <div><label>Moment</label><select id="raceMoment">
-          <option value="pre_match">pre_match</option><option value="all">all</option>
-          <option value="halftime">halftime</option><option value="post_match">post_match</option>
-        </select></div>
-        <div style="align-self:end"><button class="btn ghost" id="raceReload">Reload</button></div>
-      </div>
-      <p class="small muted">Matches ordered by kickoff. Each match scores the model's modal predicted winner; the line is the running % correct. Hit play to watch models rise and fall.</p>
-      <div id="raceWrap"></div>
+      <h2>Match grid — who got which game right</h2>
+      <p class="small muted">One column per finished match (kickoff order). Green = modal winner correct,
+        red = wrong, gray = not run. Hover a cell for details. Rows sorted by hit rate.</p>
+      <div id="chHeat" style="overflow-x:auto"></div>
     </div>
   </section>
 
@@ -1028,26 +1191,183 @@ function tab(name){
 }
 $$('.tab').forEach(t=>t.onclick=()=>tab(t.dataset.tab));
 
-// ---- Analytics: boxplots + accuracy race -------------------------------
-function fillPromptSelects(){
+// ---- Analytics ----------------------------------------------------------
+let AN={sum:null};
+let MODEL_COLOR={};
+const svgOpen=(W,H)=>`<svg viewBox="0 0 ${W} ${H}" width="100%" style="font:11px system-ui">`;
+const MOMENT_COLORS={pre_match:'#3b82f6',halftime:'#f59e0b',post_match:'#22c55e'};
+function modelColor(m){return MODEL_COLOR[m]||'#64748b';}
+function noData(sel,msg){$(sel).innerHTML='<div class="small muted">'+esc(msg||(AN.sum&&AN.sum.note)||'No data yet — ingest finished results first.')+'</div>';}
+function fmtCost(c){return c==null?'free':('$'+(c<0.01?c.toFixed(4):c.toFixed(3)));}
+function anQ(){return `prompt=${encodeURIComponent($('#anPrompt').value||'all')}&moment=${encodeURIComponent($('#anMomentG').value||'all')}`;}
+function boxQuery(){const p=$('#anPrompt').value||'all';
+  const bp=(p==='all')?($('#boxSplit').checked?'split':'agg'):p;
+  return `prompt=${encodeURIComponent(bp)}&moment=${encodeURIComponent($('#anMomentG').value||'all')}`;}
+function fillAnFilters(){const sel=$('#anPrompt');if(sel.dataset.filled)return;
   const ps=(BOOT&&BOOT.prompts)||[];
-  const opts=ps.map(p=>`<option value="${esc(p)}">${esc(p.replace('-prediction',''))}</option>`).join('');
-  const box=$('#boxPrompt');
-  if(box&&!box.dataset.filled){box.innerHTML='<option value="split">Per prompt (split)</option><option value="agg">All prompts (aggregated)</option>'+opts;box.dataset.filled='1';}
-  const race=$('#racePrompt');
-  if(race&&!race.dataset.filled){race.innerHTML='<option value="all">All prompts</option>'+opts;race.dataset.filled='1';}
+  sel.innerHTML='<option value="all">All prompts</option>'+ps.map(p=>`<option value="${esc(p)}">${esc(p.replace('-prediction',''))}</option>`).join('');
+  sel.dataset.filled='1';}
+async function loadBoxOnly(){
+  try{ANALYTICS.box=await api('./api/metrics/box?'+boxQuery());renderBox();}
+  catch(e){$('#boxWrap').innerHTML='<div class="small muted">Error: '+esc(e.message)+'</div>';}}
+async function loadAnalytics(){
+  fillAnFilters();
+  $('#boxSplit').disabled=($('#anPrompt').value||'all')!=='all';
+  loadBoxOnly();
+  try{
+    const [sum,race]=await Promise.all([api('./api/analytics?'+anQ()),api('./api/race?'+anQ())]);
+    AN.sum=sum;ANALYTICS.race=race;
+    MODEL_COLOR={};(sum.models||[]).map(x=>x.model).sort().forEach((m,i)=>MODEL_COLOR[m]=PALETTE[i%PALETTE.length]);
+    $('#anNote').textContent=sum.note||'';
+    renderLeader();renderCost();renderAgree();renderOrder();renderMoment();
+    renderCalibSel();renderCalib();renderHeat();renderRace();
+  }catch(e){toast('Analytics error: '+e.message);}
 }
-async function loadAnalyticsBox(){
-  try{const m=$('#anMoment').value||'all', p=($('#boxPrompt')&&$('#boxPrompt').value)||'split';
-    ANALYTICS.box=await api(`./api/metrics/box?moment=${encodeURIComponent(m)}&prompt=${encodeURIComponent(p)}`);renderBox();}
-  catch(e){$('#boxWrap').innerHTML='<div class="small muted">Error: '+esc(e.message)+'</div>';}
+
+function renderLeader(){
+  const ms=(AN.sum&&AN.sum.models)||[],el=$('#chLeader');
+  if(!ms.length)return noData('#chLeader');
+  const W=Math.min(940,el.clientWidth||860),padL=150,padR=170,rowH=32,H=14+ms.length*rowH+22;
+  const x=v=>padL+((v||0)/100)*(W-padL-padR);
+  let s=svgOpen(W,H);
+  for(let t=0;t<=4;t++){const xx=x(t*25);
+    s+=`<line x1="${xx}" y1="8" x2="${xx}" y2="${H-18}" stroke="var(--border)"/>`;
+    s+=`<text x="${xx}" y="${H-5}" fill="var(--muted)" text-anchor="middle">${t*25}%</text>`;}
+  ms.forEach((m,i)=>{const cy=12+i*rowH,col=modelColor(m.model);
+    s+=`<text x="${padL-8}" y="${cy+12}" fill="var(--txt)" text-anchor="end">${esc(m.model)}</text>`;
+    s+=`<rect x="${padL}" y="${cy}" width="${Math.max(1,x(m.outcome_acc)-padL)}" height="12" rx="2" fill="${col}"><title>correct winner: ${m.outcome_acc??'–'}%</title></rect>`;
+    s+=`<rect x="${padL}" y="${cy+14}" width="${Math.max(1,x(m.exact_acc)-padL)}" height="5" rx="2" fill="${col}" opacity="0.45"><title>exact score: ${m.exact_acc??'–'}%</title></rect>`;
+    s+=`<text x="${Math.max(x(m.outcome_acc),x(m.exact_acc))+6}" y="${cy+13}" fill="var(--muted)">${m.outcome_acc??'–'}% / ${m.exact_acc??'–'}% · n=${m.n}</text>`;});
+  s+='</svg>';el.innerHTML=s;
 }
-async function loadAnalyticsRace(){
-  try{const m=$('#raceMoment').value||'pre_match', p=($('#racePrompt')&&$('#racePrompt').value)||'all';
-    ANALYTICS.race=await api(`./api/race?moment=${encodeURIComponent(m)}&prompt=${encodeURIComponent(p)}`);renderRace();}
-  catch(e){$('#raceWrap').innerHTML='<div class="small muted">Error: '+esc(e.message)+'</div>';}
+function renderCost(){
+  const ms=((AN.sum&&AN.sum.models)||[]).filter(m=>m.outcome_acc!=null),el=$('#chCost');
+  if(!ms.length)return noData('#chCost');
+  const W=Math.min(560,el.clientWidth||460),H=260,padL=42,padR=16,padT=12,padB=30;
+  const maxC=Math.max(1e-9,...ms.map(m=>m.avg_cost||0));
+  const x=c=>padL+Math.sqrt((c||0)/maxC)*(W-padL-padR);
+  const y=a=>padT+(1-(a||0)/100)*(H-padT-padB);
+  let s=svgOpen(W,H);
+  for(let t=0;t<=4;t++){const yy=y(t*25);
+    s+=`<line x1="${padL}" y1="${yy}" x2="${W-padR}" y2="${yy}" stroke="var(--border)"/>`;
+    s+=`<text x="${padL-6}" y="${yy+3}" fill="var(--muted)" text-anchor="end">${t*25}%</text>`;}
+  [[0,'free'],[maxC/4,fmtCost(maxC/4)],[maxC,fmtCost(maxC)]].forEach(([c,lab])=>{
+    s+=`<text x="${x(c)}" y="${H-6}" fill="var(--muted)" text-anchor="middle">${lab}</text>`;});
+  ms.forEach((m,i)=>{const cx=x(m.avg_cost),cy=y(m.outcome_acc),col=modelColor(m.model);
+    s+=`<circle cx="${cx}" cy="${cy}" r="5" fill="${col}"><title>${esc(m.model)} · acc ${m.outcome_acc}% · ${fmtCost(m.avg_cost)}/call</title></circle>`;
+    const flip=cx>W-90;  // near the right edge, put the label on the left
+    s+=`<text x="${cx+(flip?-7:7)}" y="${cy+(i%2?12:-6)}" fill="var(--txt)" text-anchor="${flip?'end':'start'}">${esc(m.model)}</text>`;});
+  s+='</svg>';el.innerHTML=s;
 }
-function loadAnalytics(){fillPromptSelects();loadAnalyticsBox();loadAnalyticsRace();}
+function renderAgree(){
+  const ms=((AN.sum&&AN.sum.models)||[]).filter(m=>m.agreement!=null)
+    .slice().sort((a,b)=>b.agreement-a.agreement);
+  if(!ms.length)return noData('#chAgree','Needs ≥2 repetitions per match to measure agreement.');
+  const el=$('#chAgree');
+  const W=Math.min(560,el.clientWidth||460),padL=140,padR=64,rowH=24,H=10+ms.length*rowH+22;
+  const x=v=>padL+((v||0)/100)*(W-padL-padR);
+  let s=svgOpen(W,H);
+  for(let t=0;t<=4;t++){const xx=x(t*25);
+    s+=`<line x1="${xx}" y1="6" x2="${xx}" y2="${H-18}" stroke="var(--border)"/>`;
+    s+=`<text x="${xx}" y="${H-5}" fill="var(--muted)" text-anchor="middle">${t*25}%</text>`;}
+  ms.forEach((m,i)=>{const cy=8+i*rowH,col=modelColor(m.model);
+    s+=`<text x="${padL-8}" y="${cy+11}" fill="var(--txt)" text-anchor="end">${esc(m.model)}</text>`;
+    s+=`<rect x="${padL}" y="${cy}" width="${Math.max(1,x(m.agreement)-padL)}" height="12" rx="2" fill="${col}"><title>${m.agreement}% of ${m.agreement_n} match-groups unanimous</title></rect>`;
+    s+=`<text x="${x(m.agreement)+6}" y="${cy+11}" fill="var(--muted)">${m.agreement}%</text>`;});
+  s+='</svg>';el.innerHTML=s;
+}
+function renderOrder(){
+  const ms=((AN.sum&&AN.sum.models)||[]).filter(m=>m.acc_original!=null&&m.acc_reversed!=null)
+    .slice().sort((a,b)=>Math.abs(b.acc_original-b.acc_reversed)-Math.abs(a.acc_original-a.acc_reversed));
+  if(!ms.length)return noData('#chOrder','Needs runs in both team orders.');
+  const el=$('#chOrder');
+  const W=Math.min(560,el.clientWidth||460),padL=140,padR=64,rowH=24,H=26+ms.length*rowH+22;
+  const x=v=>padL+((v||0)/100)*(W-padL-padR);
+  let s=svgOpen(W,H);
+  s+=`<circle cx="${padL}" cy="10" r="4" fill="var(--accent)"/><text x="${padL+8}" y="13" fill="var(--muted)">original</text>`;
+  s+=`<circle cx="${padL+80}" cy="10" r="4" fill="var(--warn)"/><text x="${padL+88}" y="13" fill="var(--muted)">reversed</text>`;
+  for(let t=0;t<=4;t++){const xx=x(t*25);
+    s+=`<line x1="${xx}" y1="22" x2="${xx}" y2="${H-18}" stroke="var(--border)"/>`;
+    s+=`<text x="${xx}" y="${H-5}" fill="var(--muted)" text-anchor="middle">${t*25}%</text>`;}
+  ms.forEach((m,i)=>{const cy=32+i*rowH,xo=x(m.acc_original),xr=x(m.acc_reversed);
+    const d=m.acc_reversed-m.acc_original;
+    s+=`<text x="${padL-8}" y="${cy+4}" fill="var(--txt)" text-anchor="end">${esc(m.model)}</text>`;
+    s+=`<line x1="${xo}" y1="${cy}" x2="${xr}" y2="${cy}" stroke="var(--muted)" stroke-width="2" opacity="0.6"/>`;
+    s+=`<circle cx="${xo}" cy="${cy}" r="5" fill="var(--accent)"><title>original: ${m.acc_original}%</title></circle>`;
+    s+=`<circle cx="${xr}" cy="${cy}" r="5" fill="var(--warn)"><title>reversed: ${m.acc_reversed}%</title></circle>`;
+    s+=`<text x="${Math.max(xo,xr)+9}" y="${cy+4}" fill="${Math.abs(d)>=10?'var(--err)':'var(--muted)'}">${d>0?'+':''}${d.toFixed(0)}pp</text>`;});
+  s+='</svg>';el.innerHTML=s;
+}
+function renderMoment(){
+  const ms=(AN.sum&&AN.sum.models)||[],el=$('#chMoment');
+  const order=['pre_match','halftime','post_match'];
+  const present=order.filter(mm=>ms.some(m=>m.moments&&m.moments[mm]&&m.moments[mm].acc!=null));
+  if(!present.length)return noData('#chMoment');
+  const rows=ms.filter(m=>present.some(mm=>m.moments[mm]&&m.moments[mm].acc!=null));
+  const W=Math.min(560,el.clientWidth||460),padL=140,padR=60,barH=10,gap=3;
+  const rowH=present.length*(barH+gap)+8,H=24+rows.length*rowH+22;
+  const x=v=>padL+((v||0)/100)*(W-padL-padR);
+  let s=svgOpen(W,H),lx=padL;
+  present.forEach(mm=>{s+=`<rect x="${lx}" y="4" width="9" height="9" rx="2" fill="${MOMENT_COLORS[mm]}"/><text x="${lx+13}" y="12" fill="var(--muted)">${mm}</text>`;lx+=mm.length*6.4+34;});
+  for(let t=0;t<=4;t++){const xx=x(t*25);
+    s+=`<line x1="${xx}" y1="20" x2="${xx}" y2="${H-18}" stroke="var(--border)"/>`;
+    s+=`<text x="${xx}" y="${H-5}" fill="var(--muted)" text-anchor="middle">${t*25}%</text>`;}
+  rows.forEach((m,i)=>{const top=26+i*rowH;
+    s+=`<text x="${padL-8}" y="${top+rowH/2}" fill="var(--txt)" text-anchor="end">${esc(m.model)}</text>`;
+    present.forEach((mm,j)=>{const info=m.moments[mm];if(!info||info.acc==null)return;
+      const cy=top+j*(barH+gap);
+      s+=`<rect x="${padL}" y="${cy}" width="${Math.max(1,x(info.acc)-padL)}" height="${barH}" rx="2" fill="${MOMENT_COLORS[mm]}"><title>${mm}: ${info.acc}% (n=${info.n})</title></rect>`;
+      s+=`<text x="${x(info.acc)+5}" y="${cy+9}" fill="var(--muted)">${info.acc}%</text>`;});});
+  s+='</svg>';el.innerHTML=s;
+}
+function renderCalibSel(){
+  const cal=(AN.sum&&AN.sum.calibration)||{},sel=$('#calibModel');
+  const keys=Object.keys(cal),prev=sel.value;
+  sel.innerHTML=keys.length
+    ?('<option value="pooled">All models (pooled)</option>'+keys.filter(k=>k!=='pooled').sort().map(k=>`<option value="${esc(k)}">${esc(k)}</option>`).join(''))
+    :'<option value="">–</option>';
+  if(keys.includes(prev))sel.value=prev;
+}
+function renderCalib(){
+  const cal=(AN.sum&&AN.sum.calibration)||{},el=$('#chCalib');
+  const key=$('#calibModel').value||'pooled';
+  const pts=(cal[key]||[]).slice().sort((a,b)=>a.p-b.p);
+  if(!pts.length)return noData('#chCalib','No probability predictions under this filter (needs probability / six-hats prompts).');
+  const W=Math.min(520,el.clientWidth||440),H=300,padL=40,padR=12,padT=10,padB=30;
+  const x=p=>padL+p*(W-padL-padR),y=p=>padT+(1-p)*(H-padT-padB);
+  let s=svgOpen(W,H);
+  for(let t=0;t<=4;t++){const p=t/4;
+    s+=`<line x1="${x(0)}" y1="${y(p)}" x2="${x(1)}" y2="${y(p)}" stroke="var(--border)"/>`;
+    s+=`<text x="${padL-5}" y="${y(p)+3}" fill="var(--muted)" text-anchor="end">${(p*100)|0}%</text>`;
+    s+=`<text x="${x(p)}" y="${H-6}" fill="var(--muted)" text-anchor="middle">${(p*100)|0}%</text>`;}
+  s+=`<line x1="${x(0)}" y1="${y(0)}" x2="${x(1)}" y2="${y(1)}" stroke="var(--muted)" stroke-dasharray="4 4"/>`;
+  const col=key==='pooled'?'var(--accent)':modelColor(key);
+  let d='';pts.forEach((b,i)=>{d+=(i?'L':'M')+x(b.p).toFixed(1)+' '+y(b.obs).toFixed(1)+' ';});
+  s+=`<path d="${d}" fill="none" stroke="${col}" stroke-width="2"/>`;
+  pts.forEach(b=>{const r=3+Math.min(6,Math.sqrt(b.n)/3);
+    s+=`<circle cx="${x(b.p)}" cy="${y(b.obs)}" r="${r}" fill="${col}" opacity="0.85"><title>predicted ${(b.p*100).toFixed(0)}% → happened ${(b.obs*100).toFixed(0)}% (n=${b.n})</title></circle>`;});
+  s+=`<text x="${W-padR}" y="${H-6}" fill="var(--muted)" text-anchor="end">predicted probability →</text>`;
+  s+='</svg>';el.innerHTML=s;
+}
+function renderHeat(){
+  const hm=AN.sum&&AN.sum.heatmap,el=$('#chHeat');
+  if(!hm||!hm.matches||!hm.matches.length)return noData('#chHeat');
+  const rows=Object.entries(hm.rows).map(([m,cells])=>{
+    const done=cells.filter(v=>v!=null);
+    return {m,cells,acc:done.length?done.reduce((a,b)=>a+b,0)/done.length:0,n:done.length};
+  }).sort((a,b)=>b.acc-a.acc);
+  const cell=16,padL=150,padT=20,W=padL+hm.matches.length*cell+70,H=padT+rows.length*cell+8;
+  let s=`<svg width="${W}" height="${H}" style="font:10px system-ui">`;
+  hm.matches.forEach((mt,j)=>{if(j===0||(j+1)%5===0)
+    s+=`<text x="${padL+j*cell+cell/2}" y="${padT-6}" fill="var(--muted)" text-anchor="middle">${j+1}</text>`;});
+  rows.forEach((r,i)=>{const cy=padT+i*cell;
+    s+=`<text x="${padL-8}" y="${cy+12}" fill="var(--txt)" text-anchor="end" style="font-size:11px">${esc(r.m)}</text>`;
+    r.cells.forEach((v,j)=>{const mt=hm.matches[j];
+      const fill=v==null?'var(--border)':(v?'var(--ok)':'var(--err)');
+      s+=`<rect x="${padL+j*cell}" y="${cy}" width="${cell-2}" height="${cell-2}" rx="2" fill="${fill}" opacity="${v==null?0.35:0.85}"><title>${esc(r.m)} · ${esc(mt.name)} (${mt.date})${mt.actual?' · actual '+mt.actual:''} → ${v==null?'not run':(v?'correct':'wrong')}</title></rect>`;});
+    s+=`<text x="${padL+hm.matches.length*cell+6}" y="${cy+12}" fill="var(--muted)" style="font-size:11px">${(r.acc*100).toFixed(0)}%</text>`;});
+  s+='</svg>';el.innerHTML=s;
+}
 
 function renderBox(){
   const data=ANALYTICS.box, wrap=$('#boxWrap'); if(!data){return;}
@@ -1102,7 +1422,7 @@ function drawRace(){
     s+=`<text x="${padL-6}" y="${yy+3}" fill="var(--muted)" text-anchor="end">${(a*100)|0}%</text>`;}
   s+=`<line x1="${x(k)}" y1="${padT}" x2="${x(k)}" y2="${H-padB}" stroke="var(--accent)" stroke-dasharray="3 3" opacity="0.6"/>`;
   const rank=[];
-  models.forEach((m,mi)=>{const pts=data.series[m],col=PALETTE[mi%PALETTE.length];
+  models.forEach((m,mi)=>{const pts=data.series[m],col=MODEL_COLOR[m]||PALETTE[mi%PALETTE.length];
     let d='',on=false,ly=null,la=null;
     for(let i=1;i<=k;i++){const p=pts[i-1];if(!p||p.acc==null)continue;
       const px=x(i),py=y(p.acc);d+=(on?'L':'M')+px.toFixed(1)+' '+py.toFixed(1)+' ';on=true;ly=py;la=p.acc;}
@@ -1125,13 +1445,12 @@ function toggleRacePlay(){const btn=$('#racePlay');
   RACE.timer=setInterval(()=>{RACE.k++;$('#raceScrub').value=RACE.k;drawRace();
     if(RACE.k>=RACE.N){clearInterval(RACE.timer);RACE.timer=null;btn.textContent='▶ Play';}},260);
 }
+$('#anPrompt').onchange=loadAnalytics;
+$('#anMomentG').onchange=loadAnalytics;
+$('#anReload').onclick=loadAnalytics;
 $('#boxMetric').onchange=renderBox;
-$('#boxPrompt').onchange=loadAnalyticsBox;
-$('#anMoment').onchange=loadAnalyticsBox;
-$('#boxReload').onclick=loadAnalyticsBox;
-$('#racePrompt').onchange=loadAnalyticsRace;
-$('#raceMoment').onchange=loadAnalyticsRace;
-$('#raceReload').onclick=loadAnalyticsRace;
+$('#boxSplit').onchange=loadBoxOnly;
+$('#calibModel').onchange=renderCalib;
 
 function renderKpis(s){
   const k=$('#kpis');
