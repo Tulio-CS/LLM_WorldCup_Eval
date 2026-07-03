@@ -349,12 +349,14 @@ _NO_EVAL = "No finished results joined to valid predictions yet — ingest resul
 
 @app.get("/api/metrics/box")
 def api_metrics_box(
-    moment: str = "all", prompt: str = "split", _: None = Depends(require_view)
+    moment: str = "all", prompt: str = "split", group: str = "",
+    _: None = Depends(require_view),
 ) -> JSONResponse:
     """Five-number summaries (Tukey box + outliers) per group, per metric.
 
     ``prompt``: "split" = one box per model×prompt (default); "agg" = one box per
-    model pooling all prompts; or a specific prompt_id to keep only that one."""
+    model pooling all prompts; or a specific prompt_id to keep only that one.
+    ``group="prompt"`` = one box per prompt pooling every model."""
     import numpy as np
     import pandas as pd
 
@@ -387,12 +389,15 @@ def api_metrics_box(
             "outliers": outl[:60],
         }
 
-    by = ["model"] if prompt == "agg" else ["model", "prompt_id"]
+    if group == "prompt":
+        by = ["prompt_id"]
+    else:
+        by = ["model"] if prompt == "agg" else ["model", "prompt_id"]
     groups = []
     for keys, g in df.groupby(by, dropna=False):
         kv = dict(zip(by, keys if isinstance(keys, tuple) else (keys,)))
         entry = {
-            "model": str(kv["model"]),
+            "model": str(kv.get("model", "all models")),
             "prompt_id": str(kv.get("prompt_id", "all")),
             "n": int(len(g)),
         }
@@ -407,14 +412,16 @@ def api_metrics_box(
 
 @app.get("/api/race")
 def api_race(
-    moment: str = "pre_match", prompt: str = "all", _: None = Depends(require_view)
+    moment: str = "pre_match", prompt: str = "all", series: str = "model",
+    _: None = Depends(require_view),
 ) -> JSONResponse:
-    """Cumulative outcome accuracy per model across matches ordered by kickoff.
+    """Cumulative outcome accuracy across matches ordered by kickoff.
 
-    For each match the model's modal predicted winner is scored against the actual
+    For each match the group's modal predicted winner is scored against the actual
     outcome; the series is the running fraction correct (step-carried across matches
-    the model didn't cover). ``prompt``: "all" pools every prompt into the modal
-    vote; a specific prompt_id restricts the vote to that prompt."""
+    the group didn't cover). ``prompt``: "all" pools every prompt into the modal
+    vote; a specific prompt_id restricts the vote to that prompt. ``series``:
+    "model" (one line per model) or "prompt" (one line per prompt, pooling models)."""
     from collections import Counter
 
     import pandas as pd
@@ -449,9 +456,10 @@ def api_race(
         }
         labels.append({"i": i, "match_id": str(mid), **meta[mid]})
 
-    series: dict[str, list] = {}
-    for model in sorted(x for x in df["model"].dropna().unique().tolist()):
-        md = df[df["model"] == model]
+    key_col = "prompt_id" if series == "prompt" else "model"
+    series_out: dict[str, list] = {}
+    for key in sorted(x for x in df[key_col].dropna().unique().tolist()):
+        md = df[df[key_col] == key]
         per_match: dict[str, int] = {}
         for mid, g in md.groupby("match_id"):
             outs = [o for o in g["pred_outcome"].tolist() if isinstance(o, str)]
@@ -468,9 +476,10 @@ def api_race(
                 pts.append({"acc": round(last, 4), "c": per_match[mid]})
             else:
                 pts.append({"acc": round(last, 4) if last is not None else None, "c": None})
-        series[model] = pts
+        series_out[str(key)] = pts
     return JSONResponse(
-        {"labels": labels, "series": series, "moment": moment, "prompt": prompt, "note": ""}
+        {"labels": labels, "series": series_out, "moment": moment, "prompt": prompt,
+         "series_by": key_col, "note": ""}
     )
 
 
@@ -591,8 +600,84 @@ def api_analytics(
                 per[mid] = int(modal == gg["actual_outcome"].iloc[0])
         hm_rows[str(model)] = [per.get(mid) for mid in order_ids]
 
+    # Majority-vote accuracy per match — the statistic the race chart uses.
+    # It differs from per-prediction accuracy: pooling reps/orders into one
+    # modal vote per match can rank models differently.
+    for e in models_out:
+        cells = [v for v in hm_rows.get(e["model"], []) if v is not None]
+        e["modal_acc"] = round(100 * sum(cells) / len(cells), 1) if cells else None
+
+    # Per-prompt aggregates pooling every model (prompt-vs-prompt comparison).
+    prompts_out: list[dict[str, Any]] = []
+    for pid, g in df.groupby("prompt_id"):
+        brier = g["brier"].dropna()
+        gd = pd.to_numeric(g["abs_goal_diff_error"], errors="coerce").dropna()
+        out_toks = pd.to_numeric(g["completion_tokens"], errors="coerce").dropna()
+        think = pd.to_numeric(g["reasoning_tokens"], errors="coerce").dropna()
+        cost = pd.to_numeric(g["api_cost"], errors="coerce").dropna()
+        modal_hits = []
+        for mid, gg in g.groupby("match_id"):
+            outs = [o for o in gg["pred_outcome"].tolist() if isinstance(o, str)]
+            if outs:
+                modal = Counter(outs).most_common(1)[0][0]
+                modal_hits.append(int(modal == gg["actual_outcome"].iloc[0]))
+        prompts_out.append({
+            "prompt_id": str(pid),
+            "n": int(len(g)),
+            "outcome_acc": pct(g["outcome_correct"]),
+            "exact_acc": pct(g["exact_score_correct"]),
+            "modal_acc": round(100 * sum(modal_hits) / len(modal_hits), 1) if modal_hits else None,
+            "gd_err": round(float(gd.mean()), 3) if len(gd) else None,
+            "brier": round(float(brier.mean()), 4) if len(brier) else None,
+            "avg_out_tokens": round(float(out_toks.mean()), 0) if len(out_toks) else None,
+            "avg_think_tokens": round(float(think.mean()), 0) if len(think) else None,
+            "avg_cost": round(float(cost.mean()), 6) if len(cost) else None,
+        })
+    prompts_out.sort(key=lambda e: -(e["outcome_acc"] or 0))
+
+    # Usage stats over ALL successful calls (not just evaluated ones), same filters.
+    usage: dict[str, Any] = {}
+    try:
+        con = sqlite3.connect(_db_path())
+        where = "execution_status='success'"
+        params: list[Any] = []
+        if moment and moment != "all":
+            where += " AND match_moment=?"
+            params.append(moment)
+        if prompt not in ("all", "agg", "split", ""):
+            where += " AND prompt_id=?"
+            params.append(prompt)
+        row = con.execute(
+            f"SELECT COUNT(*), SUM(prompt_tokens), SUM(completion_tokens), "
+            f"SUM(reasoning_tokens), SUM(api_cost), AVG(latency_ms) "
+            f"FROM forecast_runs WHERE {where}", params,
+        ).fetchone()
+        usage = {
+            "calls": int(row[0] or 0),
+            "tokens_in": int(row[1] or 0),
+            "tokens_out": int(row[2] or 0),
+            "tokens_think": int(row[3] or 0),
+            "cost": round(float(row[4] or 0), 4),
+            "avg_latency_ms": round(float(row[5]), 0) if row[5] is not None else None,
+        }
+        usage["by_model"] = [
+            {"model": r[0], "calls": int(r[1] or 0), "tokens_in": int(r[2] or 0),
+             "tokens_out": int(r[3] or 0), "tokens_think": int(r[4] or 0),
+             "cost": round(float(r[5] or 0), 4)}
+            for r in con.execute(
+                f"SELECT model, COUNT(*), SUM(prompt_tokens), SUM(completion_tokens), "
+                f"SUM(reasoning_tokens), SUM(api_cost) FROM forecast_runs "
+                f"WHERE {where} GROUP BY model", params,
+            ).fetchall()
+        ]
+        con.close()
+    except Exception:  # pragma: no cover - usage cards are best-effort
+        usage = {}
+
     return JSONResponse(_jsonable({
         "models": models_out,
+        "prompts": prompts_out,
+        "usage": usage,
         "calibration": calibration,
         "heatmap": {"matches": hm_matches, "rows": hm_rows},
         "moment": moment, "prompt": prompt, "note": "",
@@ -895,6 +980,10 @@ a{color:#7eb0ff;text-decoration:none} a:hover{text-decoration:underline}
 .kpis{display:flex;gap:14px;margin-left:auto;flex-wrap:wrap}
 .kpi{display:flex;flex-direction:column;align-items:flex-end;line-height:1.1}
 .kpi b{font-size:16px} .kpi span{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.4px}
+.cards{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
+.card{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:8px 14px;min-width:104px}
+.card b{font-size:16px;display:block;white-space:nowrap}
+.card span{color:var(--muted);font-size:10.5px;text-transform:uppercase;letter-spacing:.4px}
 .badge{padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600;border:1px solid var(--border2)}
 .b-idle{color:var(--muted)} .b-running{color:#0b0f17;background:var(--warn);border-color:var(--warn)}
 .b-finished{color:#0b0f17;background:var(--ok);border-color:var(--ok)} .b-failed{color:#fff;background:var(--err);border-color:var(--err)}
@@ -1081,17 +1170,30 @@ tr:hover td{background:#0e1726}
       </div>
       <p class="small muted">Filters apply to every chart below. Predictions are mapped to canonical
         team order; only finished matches with ingested results count. <span id="anNote"></span></p>
+      <div id="anKpis" class="cards"></div>
     </div>
 
     <div class="panel">
       <h2>Leaderboard — outcome &amp; exact-score accuracy</h2>
-      <p class="small muted">Solid bar = picked the right winner/draw; thin bar = nailed the exact scoreline. Sorted by outcome accuracy.</p>
+      <p class="small muted">Solid bar = <b>per-prediction</b> accuracy (every rep/order counts);
+        ◇ = <b>majority-vote</b> accuracy per match — the statistic the race uses, so the two can
+        rank differently; thin bar = exact scoreline. Sorted by per-prediction accuracy.</p>
       <div id="chLeader"></div>
     </div>
 
     <div class="panel">
+      <h2>Prompt comparison — all models aggregated</h2>
+      <p class="small muted">One row per prompt strategy, pooling every model: does the prompt style
+        itself change forecast quality (and at what token cost)?</p>
+      <div id="chPrompts"></div>
+    </div>
+
+    <div class="panel">
       <h2>Accuracy race — cumulative outcome accuracy over time</h2>
-      <p class="small muted">Matches ordered by kickoff; each match scores the model's modal predicted winner. Hit play to watch the ranking evolve.</p>
+      <div class="row"><div><label>Series</label><select id="raceSeries">
+        <option value="model">Models</option><option value="prompt">Prompts (all models pooled)</option>
+      </select></div></div>
+      <p class="small muted">Matches ordered by kickoff; each match scores the group's modal predicted winner. Hit play to watch the ranking evolve.</p>
       <div id="raceWrap"></div>
     </div>
 
@@ -1119,6 +1221,16 @@ tr:hover td{background:#0e1726}
     </div>
 
     <div class="panel">
+      <h2>Usage — tokens &amp; cost by model</h2>
+      <p class="small muted">All successful calls under the current filter (not just evaluated ones).
+        Stacked: <span style="color:#94a3b8">input</span> ·
+        <span style="color:var(--accent)">output</span> ·
+        <span style="color:#a855f7">thinking</span> tokens. Cost is the recorded api_cost
+        (thinking billed separately on Gemini is not included).</p>
+      <div id="chUsage"></div>
+    </div>
+
+    <div class="panel">
       <h2>Metric distributions — boxplots</h2>
       <div class="row">
         <div><label>Metric</label><select id="boxMetric">
@@ -1126,7 +1238,11 @@ tr:hover td{background:#0e1726}
           <option value="total_goals_error">Total-goals error</option>
           <option value="brier">Brier (probability prompts)</option>
         </select></div>
-        <div style="align-self:end"><label class="small"><input type="checkbox" id="boxSplit" checked> split by prompt</label></div>
+        <div><label>Group by</label><select id="boxGroup">
+          <option value="model_prompt">model × prompt</option>
+          <option value="model">model (prompts pooled)</option>
+          <option value="prompt">prompt (models pooled)</option>
+        </select></div>
       </div>
       <p class="small muted">Lower is better; red dots are outliers.</p>
       <div id="boxWrap" class="tablewrap"></div>
@@ -1199,10 +1315,16 @@ const MOMENT_COLORS={pre_match:'#3b82f6',halftime:'#f59e0b',post_match:'#22c55e'
 function modelColor(m){return MODEL_COLOR[m]||'#64748b';}
 function noData(sel,msg){$(sel).innerHTML='<div class="small muted">'+esc(msg||(AN.sum&&AN.sum.note)||'No data yet — ingest finished results first.')+'</div>';}
 function fmtCost(c){return c==null?'free':('$'+(c<0.01?c.toFixed(4):c.toFixed(3)));}
+function fmtK(v){return v==null?'–':(v>=1e6?(v/1e6).toFixed(2)+'M':v>=1e3?(v/1e3).toFixed(1)+'k':String(Math.round(v)));}
 function anQ(){return `prompt=${encodeURIComponent($('#anPrompt').value||'all')}&moment=${encodeURIComponent($('#anMomentG').value||'all')}`;}
-function boxQuery(){const p=$('#anPrompt').value||'all';
-  const bp=(p==='all')?($('#boxSplit').checked?'split':'agg'):p;
-  return `prompt=${encodeURIComponent(bp)}&moment=${encodeURIComponent($('#anMomentG').value||'all')}`;}
+function boxQuery(){
+  const p=$('#anPrompt').value||'all', g=$('#boxGroup').value||'model_prompt';
+  const m=`moment=${encodeURIComponent($('#anMomentG').value||'all')}`;
+  if(g==='prompt')return `group=prompt&prompt=${encodeURIComponent(p)}&`+m;
+  if(p!=='all')return `prompt=${encodeURIComponent(p)}&`+m;
+  return `prompt=${g==='model'?'agg':'split'}&`+m;
+}
+function raceQ(){return anQ()+'&series='+encodeURIComponent($('#raceSeries').value||'model');}
 function fillAnFilters(){const sel=$('#anPrompt');if(sel.dataset.filled)return;
   const ps=(BOOT&&BOOT.prompts)||[];
   sel.innerHTML='<option value="all">All prompts</option>'+ps.map(p=>`<option value="${esc(p)}">${esc(p.replace('-prediction',''))}</option>`).join('');
@@ -1210,18 +1332,70 @@ function fillAnFilters(){const sel=$('#anPrompt');if(sel.dataset.filled)return;
 async function loadBoxOnly(){
   try{ANALYTICS.box=await api('./api/metrics/box?'+boxQuery());renderBox();}
   catch(e){$('#boxWrap').innerHTML='<div class="small muted">Error: '+esc(e.message)+'</div>';}}
+async function loadRaceOnly(){
+  try{ANALYTICS.race=await api('./api/race?'+raceQ());renderRace();}
+  catch(e){$('#raceWrap').innerHTML='<div class="small muted">Error: '+esc(e.message)+'</div>';}}
 async function loadAnalytics(){
   fillAnFilters();
-  $('#boxSplit').disabled=($('#anPrompt').value||'all')!=='all';
   loadBoxOnly();
   try{
-    const [sum,race]=await Promise.all([api('./api/analytics?'+anQ()),api('./api/race?'+anQ())]);
+    const [sum,race]=await Promise.all([api('./api/analytics?'+anQ()),api('./api/race?'+raceQ())]);
     AN.sum=sum;ANALYTICS.race=race;
     MODEL_COLOR={};(sum.models||[]).map(x=>x.model).sort().forEach((m,i)=>MODEL_COLOR[m]=PALETTE[i%PALETTE.length]);
     $('#anNote').textContent=sum.note||'';
-    renderLeader();renderCost();renderAgree();renderOrder();renderMoment();
-    renderCalibSel();renderCalib();renderHeat();renderRace();
+    renderKpiCards();renderLeader();renderPrompts();renderCost();renderAgree();renderOrder();renderMoment();
+    renderCalibSel();renderCalib();renderUsage();renderHeat();renderRace();
   }catch(e){toast('Analytics error: '+e.message);}
+}
+function renderKpiCards(){
+  const s=AN.sum||{},u=s.usage||{},el=$('#anKpis');
+  const best=(s.models&&s.models[0])||null, bp=(s.prompts&&s.prompts[0])||null;
+  const cards=[
+    ['evaluated preds', s.models?s.models.reduce((a,m)=>a+m.n,0):0],
+    ['finished matches', (s.heatmap&&s.heatmap.matches)?s.heatmap.matches.length:0],
+    ['successful calls', fmtK(u.calls)],
+    ['input tokens', fmtK(u.tokens_in)],
+    ['output tokens', fmtK(u.tokens_out)],
+    ['thinking tokens', fmtK(u.tokens_think)],
+    ['recorded cost', u.cost!=null?('$'+u.cost.toFixed(2)):'–'],
+    ['avg latency', u.avg_latency_ms!=null?((u.avg_latency_ms/1000).toFixed(1)+'s'):'–'],
+    ['best model', best?`${best.model} · ${best.outcome_acc}%`:'–'],
+    ['best prompt', bp?`${bp.prompt_id.replace('-prediction','')} · ${bp.outcome_acc}%`:'–'],
+  ];
+  el.innerHTML=cards.map(([lab,val])=>`<div class="card"><b>${esc(String(val))}</b><span>${esc(lab)}</span></div>`).join('');
+}
+function renderPrompts(){
+  const ps=(AN.sum&&AN.sum.prompts)||[],el=$('#chPrompts');
+  if(!ps.length)return noData('#chPrompts');
+  const W=Math.min(940,el.clientWidth||860),padL=110,padR=330,rowH=36,H=14+ps.length*rowH+22;
+  const x=v=>padL+((v||0)/100)*(W-padL-padR);
+  let s=svgOpen(W,H);
+  for(let t=0;t<=4;t++){const xx=x(t*25);
+    s+=`<line x1="${xx}" y1="8" x2="${xx}" y2="${H-18}" stroke="var(--border)"/>`;
+    s+=`<text x="${xx}" y="${H-5}" fill="var(--muted)" text-anchor="middle">${t*25}%</text>`;}
+  ps.forEach((p,i)=>{const cy=12+i*rowH,col=pcolor(p.prompt_id);
+    s+=`<text x="${padL-8}" y="${cy+13}" fill="${col}" text-anchor="end" font-weight="600">${esc(p.prompt_id.replace('-prediction',''))}</text>`;
+    s+=`<rect x="${padL}" y="${cy}" width="${Math.max(1,x(p.outcome_acc)-padL)}" height="12" rx="2" fill="${col}"><title>per-prediction winner accuracy: ${p.outcome_acc??'–'}%</title></rect>`;
+    s+=`<rect x="${padL}" y="${cy+14}" width="${Math.max(1,x(p.exact_acc)-padL)}" height="5" rx="2" fill="${col}" opacity="0.45"><title>exact score: ${p.exact_acc??'–'}%</title></rect>`;
+    if(p.modal_acc!=null){const mx=x(p.modal_acc);
+      s+=`<path d="M ${mx} ${cy} l 5 8 l -5 8 l -5 -8 Z" fill="none" stroke="var(--txt)" stroke-width="1.5"><title>majority vote per match: ${p.modal_acc}%</title></path>`;}
+    s+=`<text x="${Math.max(x(p.outcome_acc),x(p.exact_acc),x(p.modal_acc||0))+8}" y="${cy+13}" fill="var(--muted)">${p.outcome_acc??'–'}% win · ${p.exact_acc??'–'}% exact · brier ${p.brier??'–'} · ${fmtK(p.avg_out_tokens)} out-tok · n=${p.n}</text>`;});
+  s+='</svg>';el.innerHTML=s;
+}
+function renderUsage(){
+  const u=(AN.sum&&AN.sum.usage)||{},el=$('#chUsage');
+  const rows=(u.by_model||[]).slice().sort((a,b)=>(b.tokens_in+b.tokens_out+b.tokens_think)-(a.tokens_in+a.tokens_out+a.tokens_think));
+  if(!rows.length)return noData('#chUsage','No successful calls under this filter.');
+  const W=Math.min(940,el.clientWidth||860),padL=150,padR=210,rowH=24,H=10+rows.length*rowH+20;
+  const maxT=Math.max(1,...rows.map(r=>r.tokens_in+r.tokens_out+r.tokens_think));
+  const x=v=>(v/maxT)*(W-padL-padR);
+  let s=svgOpen(W,H);
+  rows.forEach((r,i)=>{const cy=8+i*rowH;let cx=padL;
+    s+=`<text x="${padL-8}" y="${cy+11}" fill="var(--txt)" text-anchor="end">${esc(r.model)}</text>`;
+    [[r.tokens_in,'#94a3b8','input'],[r.tokens_out,'var(--accent)','output'],[r.tokens_think,'#a855f7','thinking']].forEach(([v,col,lab])=>{
+      const w=x(v);if(w>0.5)s+=`<rect x="${cx}" y="${cy}" width="${w}" height="13" fill="${col}" opacity="0.85"><title>${esc(r.model)} · ${lab}: ${fmtK(v)} tokens</title></rect>`;cx+=w;});
+    s+=`<text x="${cx+6}" y="${cy+11}" fill="var(--muted)">${fmtK(r.tokens_in+r.tokens_out+r.tokens_think)} tok · ${r.cost?('$'+r.cost.toFixed(2)):'free'} · ${fmtK(r.calls)} calls</text>`;});
+  s+='</svg>';el.innerHTML=s;
 }
 
 function renderLeader(){
@@ -1235,9 +1409,11 @@ function renderLeader(){
     s+=`<text x="${xx}" y="${H-5}" fill="var(--muted)" text-anchor="middle">${t*25}%</text>`;}
   ms.forEach((m,i)=>{const cy=12+i*rowH,col=modelColor(m.model);
     s+=`<text x="${padL-8}" y="${cy+12}" fill="var(--txt)" text-anchor="end">${esc(m.model)}</text>`;
-    s+=`<rect x="${padL}" y="${cy}" width="${Math.max(1,x(m.outcome_acc)-padL)}" height="12" rx="2" fill="${col}"><title>correct winner: ${m.outcome_acc??'–'}%</title></rect>`;
+    s+=`<rect x="${padL}" y="${cy}" width="${Math.max(1,x(m.outcome_acc)-padL)}" height="12" rx="2" fill="${col}"><title>per-prediction winner accuracy: ${m.outcome_acc??'–'}%</title></rect>`;
     s+=`<rect x="${padL}" y="${cy+14}" width="${Math.max(1,x(m.exact_acc)-padL)}" height="5" rx="2" fill="${col}" opacity="0.45"><title>exact score: ${m.exact_acc??'–'}%</title></rect>`;
-    s+=`<text x="${Math.max(x(m.outcome_acc),x(m.exact_acc))+6}" y="${cy+13}" fill="var(--muted)">${m.outcome_acc??'–'}% / ${m.exact_acc??'–'}% · n=${m.n}</text>`;});
+    if(m.modal_acc!=null){const mx=x(m.modal_acc);
+      s+=`<path d="M ${mx} ${cy} l 5 8 l -5 8 l -5 -8 Z" fill="none" stroke="var(--txt)" stroke-width="1.5"><title>majority vote per match (race statistic): ${m.modal_acc}%</title></path>`;}
+    s+=`<text x="${Math.max(x(m.outcome_acc),x(m.exact_acc),x(m.modal_acc||0))+8}" y="${cy+13}" fill="var(--muted)">${m.outcome_acc??'–'}% / ◇${m.modal_acc??'–'}% / ${m.exact_acc??'–'}% · n=${m.n}</text>`;});
   s+='</svg>';el.innerHTML=s;
 }
 function renderCost(){
@@ -1422,7 +1598,7 @@ function drawRace(){
     s+=`<text x="${padL-6}" y="${yy+3}" fill="var(--muted)" text-anchor="end">${(a*100)|0}%</text>`;}
   s+=`<line x1="${x(k)}" y1="${padT}" x2="${x(k)}" y2="${H-padB}" stroke="var(--accent)" stroke-dasharray="3 3" opacity="0.6"/>`;
   const rank=[];
-  models.forEach((m,mi)=>{const pts=data.series[m],col=MODEL_COLOR[m]||PALETTE[mi%PALETTE.length];
+  models.forEach((m,mi)=>{const pts=data.series[m],col=MODEL_COLOR[m]||(data.series_by==='prompt_id'?pcolor(m):PALETTE[mi%PALETTE.length]);
     let d='',on=false,ly=null,la=null;
     for(let i=1;i<=k;i++){const p=pts[i-1];if(!p||p.acc==null)continue;
       const px=x(i),py=y(p.acc);d+=(on?'L':'M')+px.toFixed(1)+' '+py.toFixed(1)+' ';on=true;ly=py;la=p.acc;}
@@ -1436,7 +1612,7 @@ function drawRace(){
     `<div style="display:flex;align-items:center;gap:6px;margin-top:3px">
       <span style="width:14px;color:var(--muted)">${ix+1}</span>
       <span style="width:10px;height:10px;border-radius:2px;background:${r.col};display:inline-block"></span>
-      <span style="flex:1">${esc(r.m)}</span><b>${(r.acc*100).toFixed(0)}%</b></div>`).join('');
+      <span style="flex:1">${esc(r.m.replace('-prediction',''))}</span><b>${(r.acc*100).toFixed(0)}%</b></div>`).join('');
 }
 function toggleRacePlay(){const btn=$('#racePlay');
   if(RACE.timer){clearInterval(RACE.timer);RACE.timer=null;btn.textContent='▶ Play';return;}
@@ -1449,7 +1625,8 @@ $('#anPrompt').onchange=loadAnalytics;
 $('#anMomentG').onchange=loadAnalytics;
 $('#anReload').onclick=loadAnalytics;
 $('#boxMetric').onchange=renderBox;
-$('#boxSplit').onchange=loadBoxOnly;
+$('#boxGroup').onchange=loadBoxOnly;
+$('#raceSeries').onchange=loadRaceOnly;
 $('#calibModel').onchange=renderCalib;
 
 function renderKpis(s){
