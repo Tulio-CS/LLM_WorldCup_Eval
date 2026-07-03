@@ -27,7 +27,9 @@ import secrets
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import threading
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -36,6 +38,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
+from starlette.background import BackgroundTask
 
 from . import __version__
 from . import config as cfg
@@ -536,6 +539,62 @@ def download_report(_: None = Depends(require_view)) -> FileResponse:
     return FileResponse(path, filename=Path(path).name)
 
 
+@app.get("/download/archive")
+def download_archive(_: None = Depends(require_view)) -> FileResponse:
+    """Zip the SQLite DB (consistent snapshot) plus every raw JSON artifact.
+
+    The DB is copied via SQLite's online backup API so it's safe to download
+    even while a collection job is writing. The zip is streamed and deleted
+    afterwards. JSON lives under data/{raw_requests,raw_responses,traces,
+    metadata}; the manifest sits at the repo root.
+    """
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    fd, tmp_zip = tempfile.mkstemp(suffix=".zip", dir=str(cfg.DATA_DIR))
+    os.close(fd)
+    zip_path = Path(tmp_zip)
+
+    db_path = _db_path()
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        # DB: online-backup snapshot into a temp file, then add to the zip.
+        if db_path.exists():
+            fd2, tmp_db = tempfile.mkstemp(suffix=".db", dir=str(cfg.DATA_DIR))
+            os.close(fd2)
+            try:
+                src = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+                dst = sqlite3.connect(tmp_db)
+                with dst:
+                    src.backup(dst)
+                dst.close()
+                src.close()
+                zf.write(tmp_db, arcname=db_path.name)
+            finally:
+                try:
+                    os.unlink(tmp_db)
+                except OSError:  # pragma: no cover
+                    pass
+        # All raw JSON artifacts, preserving their folder names in the zip.
+        for d in (
+            cfg.RAW_REQUESTS_DIR,
+            cfg.RAW_RESPONSES_DIR,
+            cfg.TRACES_DIR,
+            cfg.METADATA_DIR,
+        ):
+            if d.exists():
+                for f in sorted(d.glob("*.json")):
+                    zf.write(f, arcname=f"{d.name}/{f.name}")
+        # Experiment manifest (JSON at the repo root).
+        manifest = cfg.ROOT / "experiment_manifest.json"
+        if manifest.exists():
+            zf.write(manifest, arcname=manifest.name)
+
+    return FileResponse(
+        zip_path,
+        filename=f"fifa_forecast_backup_{stamp}.zip",
+        media_type="application/zip",
+        background=BackgroundTask(lambda: zip_path.unlink(missing_ok=True)),
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Single-page app
 # --------------------------------------------------------------------------- #
@@ -743,6 +802,12 @@ tr:hover td{background:#0e1726}
       <p><a href="./download/evaluation">⬇ Evaluation report (forecast vs results)</a></p>
       <p><a href="./download/forecasts">⬇ Full forecasts workbook</a></p>
       <p><a href="./download/report">⬇ Quality / variability report</a></p>
+    </div>
+    <div class="panel"><h2>Full backup (.zip)</h2>
+      <p class="muted small">The complete raw dataset in one archive: the SQLite
+        database plus every JSON artifact (requests, responses, traces, metadata)
+        and the manifest. The DB is a consistent snapshot — safe to grab mid-run.</p>
+      <p><a href="./download/archive">⬇ Download database + all JSON (zip)</a></p>
     </div>
     <div class="panel"><h2>Import local runs</h2>
       <p class="muted small">Ran open models (Qwen / Mistral / Gemma) on your own machine?
