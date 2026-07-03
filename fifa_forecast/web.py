@@ -329,6 +329,121 @@ def api_compare(match_id: str, _: None = Depends(require_view)) -> JSONResponse:
     return JSONResponse(_jsonable(per_match_comparison(cfg.load_config(), match_id)))
 
 
+def _eval_frame():
+    """Canonical per-prediction DataFrame (finished matches only), reusing the
+    evaluation module's join + canonicalization. Empty frame when nothing joins."""
+    from .evaluation import load_joined, _canonicalize
+
+    joined = load_joined(_db_path())
+    if joined.empty:
+        return joined
+    for col, default in (("match_moment", None), ("team_order_type", "original")):
+        if col not in joined.columns:
+            joined[col] = default
+    return _canonicalize(joined)
+
+
+_BOX_METRICS = ["abs_goal_diff_error", "total_goals_error", "brier"]
+_NO_EVAL = "No finished results joined to valid predictions yet — ingest results first."
+
+
+@app.get("/api/metrics/box")
+def api_metrics_box(moment: str = "all", _: None = Depends(require_view)) -> JSONResponse:
+    """Five-number summaries (Tukey box + outliers) per model×prompt, per metric."""
+    import numpy as np
+    import pandas as pd
+
+    df = _eval_frame()
+    if df is None or df.empty:
+        return JSONResponse({"groups": [], "metrics": _BOX_METRICS, "note": _NO_EVAL})
+    if moment and moment != "all" and "match_moment" in df.columns:
+        df = df[df["match_moment"] == moment]
+
+    def box(vals) -> dict | None:
+        v = pd.to_numeric(vals, errors="coerce").dropna().to_numpy()
+        if v.size == 0:
+            return None
+        q1, med, q3 = (float(x) for x in np.percentile(v, [25, 50, 75]))
+        iqr = q3 - q1
+        lo, hi = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+        inl = v[(v >= lo) & (v <= hi)]
+        outl = sorted(float(x) for x in v[(v < lo) | (v > hi)])
+        return {
+            "n": int(v.size), "min": float(v.min()), "q1": q1, "med": med, "q3": q3,
+            "max": float(v.max()), "mean": float(v.mean()),
+            "whislo": float(inl.min()) if inl.size else float(v.min()),
+            "whishi": float(inl.max()) if inl.size else float(v.max()),
+            "outliers": outl[:60],
+        }
+
+    groups = []
+    for (model, prompt), g in df.groupby(["model", "prompt_id"], dropna=False):
+        entry = {"model": str(model), "prompt_id": str(prompt), "n": int(len(g))}
+        for m in _BOX_METRICS:
+            entry[m] = box(g[m]) if m in g.columns else None
+        groups.append(entry)
+    groups.sort(key=lambda e: (e["model"], e["prompt_id"]))
+    return JSONResponse({"groups": groups, "metrics": _BOX_METRICS, "moment": moment, "note": ""})
+
+
+@app.get("/api/race")
+def api_race(moment: str = "pre_match", _: None = Depends(require_view)) -> JSONResponse:
+    """Cumulative outcome accuracy per model across matches ordered by kickoff.
+
+    For each match the model's modal predicted winner is scored against the actual
+    outcome; the series is the running fraction correct (step-carried across matches
+    the model didn't cover)."""
+    from collections import Counter
+
+    import pandas as pd
+
+    df = _eval_frame()
+    if df is None or df.empty:
+        return JSONResponse({"labels": [], "series": {}, "note": _NO_EVAL})
+    if moment and moment != "all" and "match_moment" in df.columns:
+        sub = df[df["match_moment"] == moment]
+        df = sub if not sub.empty else df
+
+    order = (
+        df.groupby("match_id")["kickoff_datetime"].min().sort_values().index.tolist()
+    )
+    labels, meta = [], {}
+    for i, mid in enumerate(order, start=1):
+        g = df[df["match_id"] == mid]
+        r = g.iloc[0]
+        a1 = pd.to_numeric(g["actual_c1"], errors="coerce").dropna()
+        a2 = pd.to_numeric(g["actual_c2"], errors="coerce").dropna()
+        actual = f"{int(a1.iloc[0])}-{int(a2.iloc[0])}" if len(a1) and len(a2) else None
+        meta[mid] = {
+            "name": f"{r['team_1']} v {r['team_2']}",
+            "date": str(r.get("kickoff_datetime") or "")[:10],
+            "actual": actual,
+        }
+        labels.append({"i": i, "match_id": str(mid), **meta[mid]})
+
+    series: dict[str, list] = {}
+    for model in sorted(x for x in df["model"].dropna().unique().tolist()):
+        md = df[df["model"] == model]
+        per_match: dict[str, int] = {}
+        for mid, g in md.groupby("match_id"):
+            outs = [o for o in g["pred_outcome"].tolist() if isinstance(o, str)]
+            if not outs:
+                continue
+            modal = Counter(outs).most_common(1)[0][0]
+            per_match[mid] = int(modal == g["actual_outcome"].iloc[0])
+        pts, correct, total, last = [], 0, 0, None
+        for mid in order:
+            if mid in per_match:
+                total += 1
+                correct += per_match[mid]
+                last = correct / total
+                pts.append({"acc": round(last, 4), "c": per_match[mid]})
+            else:
+                pts.append({"acc": round(last, 4) if last is not None else None, "c": None})
+        series[model] = pts
+    return JSONResponse({"labels": labels, "series": series, "moment": moment, "note": ""})
+
+
 _FORECAST_COLS = [
     "run_id", "match_id", "team_1", "team_2", "provider", "model", "prompt_id",
     "match_moment", "team_order_type", "repetition_number",
@@ -692,6 +807,7 @@ tr:hover td{background:#0e1726}
   <div class="tab" data-tab="results">Results</div>
   <div class="tab" data-tab="compare">Compare</div>
   <div class="tab" data-tab="forecasts">Forecasts</div>
+  <div class="tab" data-tab="analytics">Analytics</div>
   <div class="tab" data-tab="downloads">Downloads</div>
 </div>
 <div class="wrap">
@@ -796,6 +912,39 @@ tr:hover td{background:#0e1726}
     </div>
   </section>
 
+  <!-- ANALYTICS -->
+  <section id="t-analytics" class="hide">
+    <div class="panel">
+      <h2>Metric distributions — boxplots by model &amp; prompt</h2>
+      <div class="row">
+        <div><label>Metric</label><select id="boxMetric">
+          <option value="abs_goal_diff_error">Goal-difference error</option>
+          <option value="total_goals_error">Total-goals error</option>
+          <option value="brier">Brier (probability prompts)</option>
+        </select></div>
+        <div><label>Moment</label><select id="anMoment">
+          <option value="all">all</option><option value="pre_match">pre_match</option>
+          <option value="halftime">halftime</option><option value="post_match">post_match</option>
+        </select></div>
+        <div style="align-self:end"><button class="btn ghost" id="boxReload">Reload</button></div>
+      </div>
+      <p class="small muted">One box per model×prompt over finished matches (all reps/orders, canonical order). Lower is better; red dots are outliers.</p>
+      <div id="boxWrap" class="tablewrap"></div>
+    </div>
+    <div class="panel">
+      <h2>Accuracy race — cumulative outcome accuracy over time</h2>
+      <div class="row">
+        <div><label>Moment</label><select id="raceMoment">
+          <option value="pre_match">pre_match</option><option value="all">all</option>
+          <option value="halftime">halftime</option><option value="post_match">post_match</option>
+        </select></div>
+        <div style="align-self:end"><button class="btn ghost" id="raceReload">Reload</button></div>
+      </div>
+      <p class="small muted">Matches ordered by kickoff. Each match scores the model's modal predicted winner; the line is the running % correct. Hit play to watch models rise and fall.</p>
+      <div id="raceWrap"></div>
+    </div>
+  </section>
+
   <!-- DOWNLOADS -->
   <section id="t-downloads" class="hide">
     <div class="panel"><h2>Excel workbooks</h2>
@@ -827,6 +976,9 @@ tr:hover td{background:#0e1726}
 <script>
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 let BOOT=null, POLL=null, lastStatus=null;
+let ANALYTICS={box:null,race:null}, RACE=null;
+const PALETTE=['#3b82f6','#22c55e','#f59e0b','#ef4444','#a855f7','#06b6d4','#ec4899','#84cc16','#f97316','#14b8a6','#eab308','#8b5cf6','#64748b','#f43f5e'];
+const pcolor=p=>({'simple-prediction':'#06b6d4','probability-prediction':'#22c55e','six-hats-prediction':'#f59e0b'}[p]||'#3b82f6');
 const fmtPct=v=>v==null?'–':(v+'%');
 const esc=s=>String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 
@@ -835,13 +987,109 @@ function toast(msg,ms=3500){const t=$('#toast');t.textContent=msg;t.classList.re
 
 function tab(name){
   $$('.tab').forEach(t=>t.classList.toggle('active',t.dataset.tab===name));
-  ['overview','run','results','compare','forecasts','downloads'].forEach(n=>$('#t-'+n).classList.toggle('hide',n!==name));
+  ['overview','run','results','compare','forecasts','analytics','downloads'].forEach(n=>$('#t-'+n).classList.toggle('hide',n!==name));
   if(name==='results')loadResults();
   if(name==='compare')loadCompare();
   if(name==='forecasts')loadForecasts();
   if(name==='overview')loadEvaluate();
+  if(name==='analytics')loadAnalytics();
 }
 $$('.tab').forEach(t=>t.onclick=()=>tab(t.dataset.tab));
+
+// ---- Analytics: boxplots + accuracy race -------------------------------
+async function loadAnalyticsBox(){
+  try{const m=$('#anMoment').value||'all';
+    ANALYTICS.box=await api('./api/metrics/box?moment='+encodeURIComponent(m));renderBox();}
+  catch(e){$('#boxWrap').innerHTML='<div class="small muted">Error: '+esc(e.message)+'</div>';}
+}
+async function loadAnalyticsRace(){
+  try{const m=$('#raceMoment').value||'pre_match';
+    ANALYTICS.race=await api('./api/race?moment='+encodeURIComponent(m));renderRace();}
+  catch(e){$('#raceWrap').innerHTML='<div class="small muted">Error: '+esc(e.message)+'</div>';}
+}
+function loadAnalytics(){loadAnalyticsBox();loadAnalyticsRace();}
+
+function renderBox(){
+  const data=ANALYTICS.box, wrap=$('#boxWrap'); if(!data){return;}
+  const metric=$('#boxMetric').value;
+  const groups=data.groups.filter(g=>g[metric]).map(g=>({model:g.model,prompt:g.prompt_id,b:g[metric]}));
+  if(!groups.length){wrap.innerHTML='<div class="small muted">'+esc(data.note||'No data for this metric yet (needs finished results; Brier needs probability prompts).')+'</div>';return;}
+  let lo=Infinity,hi=-Infinity;
+  groups.forEach(g=>{const b=g.b;lo=Math.min(lo,b.whislo,...(b.outliers||[]));hi=Math.max(hi,b.whishi,...(b.outliers||[]));});
+  if(!(hi>lo))hi=lo+1;
+  groups.sort((a,b)=>a.b.med-b.b.med);
+  const rowH=24,padL=230,padR=24,padT=24,W=Math.min(920,(wrap.clientWidth||840)),H=padT+groups.length*rowH+22;
+  const x=v=>padL+(v-lo)/(hi-lo)*(W-padL-padR);
+  let s=`<svg viewBox="0 0 ${W} ${H}" width="100%" style="font:11px system-ui">`;
+  for(let t=0;t<=4;t++){const v=lo+(hi-lo)*t/4,xx=x(v);
+    s+=`<line x1="${xx}" y1="${padT-6}" x2="${xx}" y2="${H-18}" stroke="var(--border)"/>`;
+    s+=`<text x="${xx}" y="${H-5}" fill="var(--muted)" text-anchor="middle">${v.toFixed(2)}</text>`;}
+  groups.forEach((g,i)=>{const cy=padT+i*rowH+rowH/2,b=g.b,col=pcolor(g.prompt);
+    s+=`<line x1="${x(b.whislo)}" y1="${cy}" x2="${x(b.whishi)}" y2="${cy}" stroke="var(--muted)"/>`;
+    s+=`<line x1="${x(b.whislo)}" y1="${cy-5}" x2="${x(b.whislo)}" y2="${cy+5}" stroke="var(--muted)"/>`;
+    s+=`<line x1="${x(b.whishi)}" y1="${cy-5}" x2="${x(b.whishi)}" y2="${cy+5}" stroke="var(--muted)"/>`;
+    s+=`<rect x="${x(b.q1)}" y="${cy-8}" width="${Math.max(1,x(b.q3)-x(b.q1))}" height="16" fill="${col}22" stroke="${col}" stroke-width="1.5"/>`;
+    s+=`<line x1="${x(b.med)}" y1="${cy-8}" x2="${x(b.med)}" y2="${cy+8}" stroke="${col}" stroke-width="2"/>`;
+    (b.outliers||[]).forEach(o=>{s+=`<circle cx="${x(o)}" cy="${cy}" r="2" fill="var(--err)" opacity="0.55"/>`;});
+    s+=`<title></title>`;
+    s+=`<text x="${padL-8}" y="${cy+3}" fill="var(--txt)" text-anchor="end">${esc(g.model)} · <tspan fill="${col}">${esc(g.prompt.replace('-prediction',''))}</tspan> <tspan fill="var(--muted)">n=${b.n}</tspan></text>`;});
+  s+='</svg>';wrap.innerHTML=s;
+}
+
+function renderRace(){
+  const data=ANALYTICS.race, wrap=$('#raceWrap');
+  if(!data||!data.labels.length){wrap.innerHTML='<div class="small muted">'+esc((data&&data.note)||'No finished results yet.')+'</div>';return;}
+  const models=Object.keys(data.series), N=data.labels.length;
+  wrap.innerHTML=`<div class="section-actions" style="margin-bottom:8px">
+      <button class="btn ghost" id="racePlay">▶ Play</button>
+      <input type="range" id="raceScrub" min="1" max="${N}" value="${N}" style="flex:1;min-width:160px">
+      <span class="small muted" id="raceAt"></span></div>
+    <div style="display:flex;gap:14px;flex-wrap:wrap">
+      <div style="flex:1;min-width:320px" id="raceSvg"></div>
+      <div id="raceLegend" class="small" style="min-width:190px"></div></div>`;
+  RACE={data,models,N,k:N,timer:null};
+  $('#raceScrub').oninput=e=>{RACE.k=+e.target.value;drawRace();};
+  $('#racePlay').onclick=toggleRacePlay;
+  drawRace();
+}
+function drawRace(){
+  const {data,models,N,k}=RACE;
+  const W=760,H=340,padL=42,padR=12,padT=14,padB=24;
+  const x=i=>padL+(N<=1?0:(i-1)/(N-1))*(W-padL-padR), y=a=>padT+(1-a)*(H-padT-padB);
+  let s=`<svg viewBox="0 0 ${W} ${H}" width="100%" style="font:11px system-ui">`;
+  for(let t=0;t<=4;t++){const a=t/4,yy=y(a);
+    s+=`<line x1="${padL}" y1="${yy}" x2="${W-padR}" y2="${yy}" stroke="var(--border)"/>`;
+    s+=`<text x="${padL-6}" y="${yy+3}" fill="var(--muted)" text-anchor="end">${(a*100)|0}%</text>`;}
+  s+=`<line x1="${x(k)}" y1="${padT}" x2="${x(k)}" y2="${H-padB}" stroke="var(--accent)" stroke-dasharray="3 3" opacity="0.6"/>`;
+  const rank=[];
+  models.forEach((m,mi)=>{const pts=data.series[m],col=PALETTE[mi%PALETTE.length];
+    let d='',on=false,ly=null,la=null;
+    for(let i=1;i<=k;i++){const p=pts[i-1];if(!p||p.acc==null)continue;
+      const px=x(i),py=y(p.acc);d+=(on?'L':'M')+px.toFixed(1)+' '+py.toFixed(1)+' ';on=true;ly=py;la=p.acc;}
+    if(d){s+=`<path d="${d}" fill="none" stroke="${col}" stroke-width="2" opacity="0.9"/>`;
+      s+=`<circle cx="${x(k)}" cy="${ly}" r="3" fill="${col}"/>`;rank.push({m,acc:la,col});}});
+  s+='</svg>';$('#raceSvg').innerHTML=s;
+  const lab=data.labels[k-1];
+  $('#raceAt').textContent=`#${k}/${N} · ${lab.date} · ${lab.name}`+(lab.actual?` (${lab.actual})`:'');
+  rank.sort((a,b)=>b.acc-a.acc);
+  $('#raceLegend').innerHTML='<b>Ranking @ '+k+'</b>'+rank.map((r,ix)=>
+    `<div style="display:flex;align-items:center;gap:6px;margin-top:3px">
+      <span style="width:14px;color:var(--muted)">${ix+1}</span>
+      <span style="width:10px;height:10px;border-radius:2px;background:${r.col};display:inline-block"></span>
+      <span style="flex:1">${esc(r.m)}</span><b>${(r.acc*100).toFixed(0)}%</b></div>`).join('');
+}
+function toggleRacePlay(){const btn=$('#racePlay');
+  if(RACE.timer){clearInterval(RACE.timer);RACE.timer=null;btn.textContent='▶ Play';return;}
+  if(RACE.k>=RACE.N)RACE.k=1;
+  btn.textContent='⏸ Pause';
+  RACE.timer=setInterval(()=>{RACE.k++;$('#raceScrub').value=RACE.k;drawRace();
+    if(RACE.k>=RACE.N){clearInterval(RACE.timer);RACE.timer=null;btn.textContent='▶ Play';}},260);
+}
+$('#boxMetric').onchange=renderBox;
+$('#anMoment').onchange=loadAnalyticsBox;
+$('#boxReload').onclick=loadAnalyticsBox;
+$('#raceMoment').onchange=loadAnalyticsRace;
+$('#raceReload').onclick=loadAnalyticsRace;
 
 function renderKpis(s){
   const k=$('#kpis');

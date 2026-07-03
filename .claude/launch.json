@@ -4,7 +4,7 @@
     {
       "name": "fifa-web",
       "runtimeExecutable": "python",
-      "runtimeArgs": ["-m", "uvicorn", "server:app", "--host", "127.0.0.1", "--port", "8156"],
+      "runtimeArgs": ["-m", "uvicorn", "fifa_forecast.web:app", "--host", "127.0.0.1", "--port", "8156"],
       "port": 8156
     }
   ]
